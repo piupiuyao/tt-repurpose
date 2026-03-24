@@ -1,0 +1,32 @@
+{
+  "style": "candy-drama",
+  "visual_style": "photorealistic 3D CGI render, character has a realistic actual dessert/candy food item as their oversized head with human eyes nose mouth naturally embedded into the food texture, adult human body with realistic proportions, high-end Pixar meets hyperrealism style, NOT cartoon chibi NOT doll-like NOT toy-like, urban casual wear, warm cinematic lighting, 9:16 vertical",
+  "characters": {
+    "females": [
+      {
+        "role": "protagonist_1",
+        "name": "Cupcake Candy",
+        "description": "realistic oversized pink cupcake as head — pink frosting swirl on top with rainbow sprinkles, cherry on top, human eyes nose lips naturally embedded in the pink frosting, adult female body with pink sprinkle-dotted skin, black form-fitting mini dress, black heels, cherry drop earrings, pregnant belly"
+      },
+      {
+        "role": "protagonist_2",
+        "name": "Donut Diana",
+        "description": "realistic oversized glazed donut as head — round golden donut with hole in middle, colorful sprinkles on glaze, human eyes nose lips embedded in the donut surface, adult female body with golden tan skin and sprinkles, red sleeveless mini dress, red heels, gold hoop earrings, pregnant belly"
+      }
+    ],
+    "males": [
+      {
+        "role": "cheating_man",
+        "name": "Choco Chad",
+        "description": "realistic oversized dark chocolate bar as head — rectangular dark brown chocolate bar with grid pattern on surface, human eyes nose lips embedded in the chocolate surface, muscular adult male body with dark brown skin, white button-up shirt open at chest, dark jeans, black boots, gold chain necklace"
+      },
+      {
+        "role": "doctor",
+        "name": "Gumball Gary",
+        "description": "realistic oversized glass gumball machine as head — clear glass globe filled with colorful gumballs, metal base, glasses perched on the glass, human eyes nose lips visible through the glass, adult male body in white doctor coat, stethoscope around neck"
+      }
+    ]
+  },
+  "aspect_ratio": "9:16",
+  "target_duration_seconds": 60
+}

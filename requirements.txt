@@ -1,0 +1,10 @@
+streamlit
+yt-dlp
+openai-whisper
+ffmpeg-python
+openai
+google-genai
+python-dotenv
+click
+pillow
+requests

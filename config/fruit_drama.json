@@ -1,0 +1,52 @@
+{
+  "style": "fruit-drama",
+  "visual_style": "photorealistic 3D CGI render, character has a realistic actual fruit as their oversized head with human eyes nose mouth naturally embedded into the fruit skin texture, slender adult human body with realistic proportions, high-end Pixar meets hyperrealism style, NOT cartoon chibi NOT doll-like NOT toy-like, luxury resort wear, Single's Inferno Korean dating show aesthetic, warm golden sunset cinematic lighting",
+  "characters": {
+    "females": [
+      {
+        "role": "protagonist",
+        "name": "Mango Maria",
+        "description": "realistic oversized mango as head with human eyes nose lips embedded in the mango skin, long dark hair, slender adult female body, elegant gold satin evening gown with thigh slit, gold stiletto heels, diamond earrings"
+      },
+      {
+        "role": "temptress",
+        "name": "Cherry Chloe",
+        "description": "realistic oversized red cherry as head with a long green stem on top, human eyes nose lips on the shiny red cherry surface, NO hair on the cherry head, slender adult female body, red sequin cocktail dress, red strappy heels, confident pose"
+      },
+      {
+        "role": "sidekick",
+        "name": "Watermelon Wendy",
+        "description": "realistic oversized watermelon as head with human eyes nose lips on the green-striped watermelon surface, wavy hair, slender adult female body, emerald green wrap dress, nude heels, gold hoop earrings"
+      },
+      {
+        "role": "comic_relief",
+        "name": "Strawberry Sara",
+        "description": "realistic oversized strawberry as head with human eyes nose lips on the red strawberry surface, high ponytail, slender adult female body, pink off-shoulder mini dress, white heels, pearl necklace"
+      }
+    ],
+    "males": [
+      {
+        "role": "main_love_interest",
+        "name": "Banana Bruno",
+        "description": "realistic oversized banana as head with human eyes nose lips on the yellow banana surface, sunglasses on top, athletic adult male body, white linen shirt open at chest, tailored beige trousers, loafers, gold chain necklace"
+      },
+      {
+        "role": "new_love",
+        "name": "Blueberry Ben",
+        "description": "realistic oversized blueberry as head with human eyes nose lips on the dark blue surface, round glasses, adult male body, navy slim-fit blazer over white shirt, dark chinos, white sneakers"
+      },
+      {
+        "role": "bad_boy",
+        "name": "Orange Orlando",
+        "description": "realistic oversized orange as head with human eyes nose lips on the orange citrus surface, muscular adult male body, tropical floral shirt open at chest, tailored shorts, leather sandals, gold necklace"
+      },
+      {
+        "role": "quiet_one",
+        "name": "Grape Gregory",
+        "description": "realistic cluster of purple grapes as head with human eyes nose lips on the grape cluster surface, adult male body, purple silk shirt, fitted grey trousers, white sneakers"
+      }
+    ]
+  },
+  "aspect_ratio": "9:16",
+  "target_duration_seconds": 60
+}
