@@ -25,8 +25,9 @@ def detect_characters(output_dir: Path) -> dict:
     if not frames:
         raise FileNotFoundError("No frames found — run extract first")
 
-    step = max(1, len(frames) // 5)
-    sample_frames = frames[::step][:5]
+    # Use all selected frames (user already filtered in Step 2), cap at 9 for API limits
+    step = max(1, len(frames) // 9)
+    sample_frames = frames[::step][:9]
 
     # Load transcript to help identify ALL characters (including ones not in sampled frames)
     transcript = ""
@@ -48,23 +49,25 @@ def detect_characters(output_dir: Path) -> dict:
             "text": (
                 "These are frames from an AI-generated TikTok food/candy drama video.\n\n"
                 "Extract:\n"
-                "1. ALL CHARACTERS: every character that speaks or appears — including main family AND secondary characters (lover/affair partner, friend, employer, police, judge, neighbor, accomplice, etc). Infer from the transcript if they don't appear in the frames. For each: family_role (mother/father/child/lover/friend/employer/police/accomplice/other), gender, age (adult/child)\n"
+                "1. ALL CHARACTERS: Count EVERY visually distinct character across ALL frames. Characters with different head shapes, colors, or outfits are SEPARATE characters even if they have similar roles. Do NOT merge characters — if you see 3 different male characters, list all 3. For each: role (free-form, describe their role in the story in 1-3 words, e.g. 'host', 'main love interest', 'rival', 'shy newcomer'), gender, age (adult/child), brief_description (e.g. 'green spiky-haired man in blazer')\n"
                 "2. VISUAL STYLE: describe the render quality precisely — is it photorealistic, Pixar-style, cartoon? What is the lighting like? Be specific so image generation can match it exactly.\n"
-                "3. ORIGINAL FOOD TYPES: list of food/candy types used (to avoid copying them)\n"
-                "4. Best ref frames: which frame best shows female characters? male characters?\n\n"
+                "3. ORIGINAL FOOD TYPES: list ALL food/candy/plant types used — one per character (to avoid copying them)\n"
+                "4. CHARACTER CATEGORY: what type of objects are the characters? Examples: fruit, candy, vegetable, dessert, flower, plant, phone/electronics, household_item, toy, etc. Be specific.\n"
+                "5. Best ref frames: which frame best shows female characters? male characters?\n\n"
+                "CRITICAL: Do NOT undercount characters. Look at EVERY frame carefully. If the video has 8 distinct characters, list all 8. Each unique visual appearance = one character entry.\n\n"
                 + transcript_section +
                 "\n\nReturn ONLY valid JSON:\n"
                 "{\n"
                 '  "visual_style": "...",\n'
+                '  "food_category": "flower",\n'
                 '  "female_ref_frame": "frame_XXXX.png",\n'
                 '  "male_ref_frame": "frame_XXXX.png",\n'
-                '  "original_food_types": ["strawberry", "eggplant", ...],\n'
-                '  "family_structure": [\n'
-                '    {"family_role": "mother", "gender": "female", "age": "adult"},\n'
-                '    {"family_role": "lover", "gender": "female", "age": "adult"},\n'
-                '    {"family_role": "friend", "gender": "female", "age": "adult"},\n'
-                '    {"family_role": "father", "gender": "male", "age": "adult"},\n'
-                '    {"family_role": "child", "gender": "male", "age": "child"}\n'
+                '  "original_food_types": ["rose", "orchid", "cactus", ...],\n'
+                '  "characters": [\n'
+                '    {"role": "host", "gender": "female", "age": "adult", "brief_description": "yellow flower woman in pink gown"},\n'
+                '    {"role": "main love interest", "gender": "female", "age": "adult", "brief_description": "pink flower woman in flowing dress"},\n'
+                '    {"role": "rival", "gender": "male", "age": "adult", "brief_description": "green plant man with spiky hair"},\n'
+                '    {"role": "shy newcomer", "gender": "male", "age": "adult", "brief_description": "older green plant man in blazer"}\n'
                 "  ]\n"
                 "}"
             )
@@ -86,40 +89,45 @@ def detect_characters(output_dir: Path) -> dict:
     analysis = json.loads(match.group())
 
     original_food_types = analysis.get("original_food_types", [])
-    family_structure = analysis.get("family_structure", [])
+    char_structure = analysis.get("characters", analysis.get("family_structure", []))
+    food_category = analysis.get("food_category", "fruit")
     visual_style = analysis.get("visual_style", "Hyperrealistic Pixar-style 3D render with cinematic lighting")
     print(f"  >> Original food types: {original_food_types}")
-    print(f"  >> Family structure: {[c['family_role'] for c in family_structure]}")
+    print(f"  >> Food category: {food_category}")
+    print(f"  >> Characters detected: {len(char_structure)}")
+    for c in char_structure:
+        print(f"     {c.get('role', '?')} ({c.get('gender', '?')}) — {c.get('brief_description', '')}")
 
     # ── Step 2: Generate a NEW cast with different food types ──
     print("  >> Generating NEW character cast with different food types...")
     # peach is permanently banned — triggers Grok video content moderation
-    BANNED_FOOD_TYPES = ["peach"]
-    avoid_types = list(set(original_food_types + BANNED_FOOD_TYPES))
+    avoid_types = list(set(original_food_types))
     avoid_str = ", ".join(avoid_types) if avoid_types else "none"
     gen_prompt = (
-        f"Create a NEW cast of anthropomorphic food/candy characters for a TikTok drama video.\n\n"
-        f"Family structure to recreate:\n{json.dumps(family_structure, indent=2)}\n\n"
+        f"Create a NEW cast of anthropomorphic {food_category} characters for a TikTok drama video.\n\n"
+        f"The original video used: {', '.join(original_food_types)}. These are {food_category} characters.\n\n"
+        f"Original cast to recreate (1:1 replacement for each):\n{json.dumps(char_structure, indent=2)}\n\n"
         f"RULES:\n"
-        f"- Do NOT use these food types (permanently banned): {avoid_str}\n"
-        f"- Choose visually interesting, distinct food/candy types\n"
+        f"- CRITICAL: All characters MUST be the SAME category as the original: {food_category}. If originals are phones, use different phones/electronics. If originals are fruits, use different fruits. NEVER mix categories.\n"
+        f"- Do NOT reuse the original types: {avoid_str}\n"
+        f"- Be CREATIVE and DIVERSE — pick from a WIDE variety of {food_category} types (e.g. apple, strawberry, banana, watermelon, grape, pineapple, kiwi, blueberry, lemon, coconut, etc). Avoid defaulting to cherry or peach every time. Surprise us!\n"
+        f"- Choose visually interesting, distinct {food_category} types that look DIFFERENT from each other in shape, color, and size\n"
         f"- Adults should look stylish and glamorous; children should look cute and small\n"
-        f"- If multiple characters have the same role (e.g. two police), MERGE them into ONE character\n"
-        f"- Maximum 6 characters total — keep the cast lean\n"
+        f"- Do NOT merge characters — create EXACTLY {len(char_structure)} characters, one for each original\n"
+        f"- Every character from the original must have a 1:1 replacement with the same role\n"
         f"- Art style: {visual_style}\n\n"
         f"For each character provide:\n"
         f"- name: fun memorable name matching food type (e.g. 'Mango Mama', 'Lemon Larry')\n"
         f"- food_type: the food/candy type chosen\n"
         f"- gender: 'female' or 'male'\n"
-        f"- family_role: same as input structure\n"
-        f"- role: narrative role (protagonist/antagonist/sidekick/other)\n"
-        f"- description: detailed visual description — food head shape/texture/color, body proportions, outfit, accessories, expression\n"
+        f"- role: same role as the original character it replaces\n"
+        f"- description: detailed visual description — food head shape/texture/color, body proportions, outfit, accessories. CRITICAL: every character MUST have a clearly visible FACE with BIG expressive cartoon eyes, eyebrows, a small nose, and a mouth/smile on the FRONT of the head. The food/flower/object element sits on TOP of the head like a hat or frames the face — it must NEVER cover or replace the face.\n"
         f"- ref_hint: brief visual identifier (e.g. 'tall mango character in yellow dress')\n\n"
         "Return ONLY valid JSON:\n"
         "{\n"
         '  "characters": {\n'
-        '    "females": [{"role":"...","family_role":"...","name":"...","food_type":"...","gender":"female","description":"...","ref_hint":"..."}],\n'
-        '    "males": [{"role":"...","family_role":"...","name":"...","food_type":"...","gender":"male","description":"...","ref_hint":"..."}]\n'
+        '    "females": [{"role":"...","name":"...","food_type":"...","gender":"female","description":"...","ref_hint":"..."}],\n'
+        '    "males": [{"role":"...","name":"...","food_type":"...","gender":"male","description":"...","ref_hint":"..."}]\n'
         "  }\n"
         "}"
     )
@@ -153,7 +161,7 @@ def detect_characters(output_dir: Path) -> dict:
     males = config["characters"].get("males", [])
     print(f"  >> NEW cast: {len(females)}F + {len(males)}M characters → saved to style_config.json")
     for c in females + males:
-        print(f"     {c['name']} ({c['food_type']}) — {c['family_role']}")
+        print(f"     {c['name']} ({c['food_type']}) — {c.get('role', '?')}")
 
     return config
 
@@ -177,19 +185,34 @@ def run(output_dir: Path) -> dict:
     system_prompt_path = Path(__file__).parent.parent / "prompts" / "analyze_system.txt"
     system_prompt = system_prompt_path.read_text().strip()
 
-    # Sample frames for visual analysis
+    # Use ALL remaining frames (user already selected the ones they want in Step 2)
     frames_dir = output_dir / "frames"
-    frames = sorted(frames_dir.glob("frame_*.png")) if frames_dir.exists() else []
-    step = max(1, len(frames) // 9)
-    sample_frames = frames[::step][:9]
+    sample_frames = sorted(frames_dir.glob("frame_*.png")) if frames_dir.exists() else []
+    num_beats = len(sample_frames) if sample_frames else 7
+
+    # Load scene durations from scenes.json
+    scene_durations = {}
+    scenes_json = output_dir / "scenes.json"
+    if scenes_json.exists():
+        with open(scenes_json) as f:
+            scenes_meta = json.load(f)
+        for s in scenes_meta:
+            scene_durations[s["frame"]] = s["duration"]
+
+    # Replace N in system prompt with actual frame count
+    system_prompt = system_prompt.replace("EXACTLY N beats", f"EXACTLY {num_beats} beats")
+    system_prompt = system_prompt.replace("exactly N beats", f"exactly {num_beats} beats")
+    system_prompt = system_prompt.replace("selected N key frames", f"selected {num_beats} key frames")
 
     # Build multimodal user message: frames + transcript
     user_content = []
     if sample_frames:
-        user_content.append({"type": "text", "text": "VIDEO FRAMES (in order):"})
+        user_content.append({"type": "text", "text": f"VIDEO FRAMES ({num_beats} selected scenes, in order) — generate exactly {num_beats} beats, one per frame:"})
         for frame_path in sample_frames:
             user_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{_load_image_b64(frame_path)}"}})
-            user_content.append({"type": "text", "text": f"(frame: {frame_path.name})"})
+            dur = scene_durations.get(frame_path.name, 0)
+            dur_info = f" — original scene duration: {dur:.1f}s" if dur else ""
+            user_content.append({"type": "text", "text": f"(frame: {frame_path.name}{dur_info})"})
 
     transcript_text = f"\n\nTRANSCRIPT:\n{transcript}"
     if segments:
@@ -198,14 +221,14 @@ def run(output_dir: Path) -> dict:
             transcript_text += f"[{seg['start']:.1f}s - {seg['end']:.1f}s] {seg['text'].strip()}\n"
     user_content.append({"type": "text", "text": transcript_text})
 
-    print("  >> Calling Claude via OpenRouter for 7-beat analysis...")
+    print(f"  >> Calling Claude via OpenRouter for {num_beats}-beat analysis...")
     client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=os.environ["OPENROUTER_API_KEY"],
     )
     response = client.chat.completions.create(
         model="anthropic/claude-sonnet-4-5",
-        max_tokens=2048,
+        max_tokens=max(2048, num_beats * 400),
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
@@ -230,11 +253,19 @@ def run(output_dir: Path) -> dict:
         else:
             raise ValueError(f"Claude returned non-JSON response:\n{raw}")
 
+    # Inject original scene durations into beats
+    beats = result.get("beats", [])
+    if scene_durations and sample_frames:
+        for i, beat in enumerate(beats):
+            if i < len(sample_frames):
+                dur = scene_durations.get(sample_frames[i].name, 0)
+                if dur:
+                    beat["original_duration"] = dur
+
     beats_path = output_dir / "beats.json"
     with open(beats_path, "w") as f:
         json.dump(result, f, indent=2, ensure_ascii=False)
 
-    beats = result.get("beats", [])
     print(f"  >> Analysis complete: {len(beats)} beats saved to {beats_path}")
 
     for beat in beats:

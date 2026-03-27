@@ -22,15 +22,11 @@ def srt_time(seconds: float) -> str:
 
 
 def extract_lines_from_grok_prompt(grok_prompt: str) -> list[str]:
-    """Extract spoken lines from grok_prompt.
-    Handles both double quotes and single quotes (including contractions like you're, I'm).
-    """
+    """Extract spoken lines from grok_prompt."""
     import re
-    # Try double quotes first (no apostrophe issue)
     results = re.findall(r'says[:\s]+"([^"]+)"', grok_prompt, re.IGNORECASE)
     if results:
         return results
-    # Single quotes: closing quote must NOT be followed by a letter (to allow contractions)
     results = re.findall(r"says[:\s]+'(.*?)'(?![a-zA-Z])", grok_prompt, re.IGNORECASE | re.DOTALL)
     return results
 
@@ -41,11 +37,9 @@ def generate_srt(beats: list, durations: list) -> str:
     t = 0.0
 
     for beat, dur in zip(beats, durations):
-        # Extract dialogue from grok_prompt (reflects what was actually sent to Grok)
         grok_prompt = beat.get("grok_prompt", "")
         spoken_lines = extract_lines_from_grok_prompt(grok_prompt) if grok_prompt else []
 
-        # Fallback to dialogue array if grok_prompt has no extractable lines
         if not spoken_lines:
             spoken_lines = [d["line"] for d in beat.get("dialogue", [])]
 
@@ -102,39 +96,16 @@ def run(output_dir: Path) -> Path:
         f.write(srt_content)
     print(f"  >> Subtitles written: {srt_path}")
 
-    # Concatenate videos
-    raw_path = output_dir / "raw_concat.mp4"
+    # Concatenate with re-encoding (fixes codec mismatch between clips)
+    final_path = output_dir / "final.mp4"
     subprocess.run([
         "ffmpeg", "-y", "-f", "concat", "-safe", "0",
         "-i", str(concat_file),
-        "-c", "copy", str(raw_path)
-    ], check=True, capture_output=True)
-    print(f"  >> Concatenated: {raw_path.name}")
-
-    # Burn subtitles with TikTok style
-    final_path = output_dir / "final.mp4"
-    subtitle_filter = (
-        f"subtitles={srt_path}:force_style='"
-        "FontName=Arial,"
-        "FontSize=16,"
-        "PrimaryColour=&H00FFFFFF,"
-        "OutlineColour=&H00000000,"
-        "BackColour=&H80000000,"
-        "Bold=1,"
-        "Outline=2,"
-        "Shadow=1,"
-        "Alignment=2,"
-        "MarginV=40"
-        "'"
-    )
-    subprocess.run([
-        "ffmpeg", "-y",
-        "-i", str(raw_path),
-        "-vf", subtitle_filter,
         "-c:v", "libx264", "-crf", "18", "-preset", "fast",
-        "-c:a", "copy",
+        "-c:a", "aac", "-b:a", "128k",
         str(final_path)
     ], check=True, capture_output=True)
+    print(f"  >> Concatenated: {final_path.name}")
 
     size_mb = final_path.stat().st_size / 1024 / 1024
     print(f"  >> Final video: {final_path.name} ({size_mb:.1f}MB)")

@@ -28,7 +28,29 @@ def download_video(url: str, output_dir: Path) -> Path:
     return output_path
 
 
+def has_audio(video_path: Path) -> bool:
+    """Check if video file has an audio stream."""
+    result = subprocess.run(
+        ["ffprobe", "-v", "quiet", "-select_streams", "a",
+         "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(video_path)],
+        capture_output=True, text=True
+    )
+    return bool(result.stdout.strip())
+
+
 def transcribe(video_path: Path, output_dir: Path) -> dict:
+    transcript_json = output_dir / "transcript.json"
+    transcript_txt = output_dir / "transcript.txt"
+
+    if not has_audio(video_path):
+        print("  >> No audio track found — skipping transcription")
+        data = {"text": "", "segments": []}
+        with open(transcript_json, "w") as f:
+            json.dump(data, f)
+        with open(transcript_txt, "w") as f:
+            f.write("")
+        return data
+
     print("  >> Transcribing with Whisper (model: medium)")
     run_cmd(
         [
@@ -46,14 +68,12 @@ def transcribe(video_path: Path, output_dir: Path) -> dict:
         raise RuntimeError(f"Whisper output not found at {json_path}")
 
     # Rename to transcript.json
-    transcript_json = output_dir / "transcript.json"
     json_path.rename(transcript_json)
 
     with open(transcript_json) as f:
         data = json.load(f)
 
     # Also write plain text transcript
-    transcript_txt = output_dir / "transcript.txt"
     with open(transcript_txt, "w") as f:
         f.write(data.get("text", "").strip())
 
@@ -61,23 +81,72 @@ def transcribe(video_path: Path, output_dir: Path) -> dict:
     return data
 
 
-def extract_keyframes(video_path: Path, output_dir: Path) -> list[Path]:
+def detect_scenes(video_path: Path, output_dir: Path) -> list[dict]:
+    """Use PySceneDetect to find scene boundaries and extract a representative frame per scene."""
+    from scenedetect import open_video, SceneManager, ContentDetector
+    from scenedetect.scene_manager import save_images
+
     frames_dir = output_dir / "frames"
     frames_dir.mkdir(exist_ok=True)
 
-    run_cmd(
-        [
-            "ffmpeg", "-y",
-            "-i", str(video_path),
-            "-vf", "fps=0.5",
-            str(frames_dir / "frame_%04d.png"),
-        ],
-        "Extracting frames at 0.5fps (one every 2 seconds)"
+    print("  >> Detecting scene boundaries with PySceneDetect...")
+    video = open_video(str(video_path))
+    sm = SceneManager()
+    sm.add_detector(ContentDetector(threshold=27))
+    sm.detect_scenes(video)
+    scene_list = sm.get_scene_list()
+
+    if not scene_list:
+        print("  >> No scene cuts detected — falling back to single-scene")
+        # Get total duration
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "csv=p=0", str(video_path)],
+            capture_output=True, text=True
+        )
+        total_dur = float(result.stdout.strip())
+        scene_list = [(video.base_timecode, video.base_timecode + total_dur)]
+
+    # Save middle frame of each scene
+    save_images(
+        scene_list,
+        video,
+        num_images=1,
+        output_dir=str(frames_dir),
+        image_name_template='$SCENE_NUMBER',
+        image_extension='png',
     )
 
+    # Rename saved frames to frame_XXXX.png format for compatibility
+    scenes_meta = []
+    for i, (start, end) in enumerate(scene_list):
+        scene_num = i + 1
+        # PySceneDetect saves as 001.png, 002.png, etc.
+        src = frames_dir / f"{scene_num:03d}.png"
+        dst = frames_dir / f"frame_{scene_num:04d}.png"
+        if src.exists():
+            src.rename(dst)
+
+        duration = round(end.get_seconds() - start.get_seconds(), 1)
+        scenes_meta.append({
+            "scene_number": scene_num,
+            "start": round(start.get_seconds(), 2),
+            "end": round(end.get_seconds(), 2),
+            "duration": duration,
+            "frame": f"frame_{scene_num:04d}.png",
+        })
+
+    # Save scene metadata
+    scenes_json = output_dir / "scenes.json"
+    with open(scenes_json, "w") as f:
+        json.dump(scenes_meta, f, indent=2)
+
     frames = sorted(frames_dir.glob("frame_*.png"))
-    print(f"  >> Extracted {len(frames)} keyframes")
-    return frames
+    total_dur = sum(s["duration"] for s in scenes_meta)
+    print(f"  >> Detected {len(scenes_meta)} scenes ({total_dur:.1f}s total)")
+    for s in scenes_meta:
+        print(f"     Scene {s['scene_number']}: {s['start']:.1f}s - {s['end']:.1f}s ({s['duration']:.1f}s)")
+    return scenes_meta
 
 
 def run(url: str, output_dir: Path) -> dict:
@@ -89,17 +158,20 @@ def run(url: str, output_dir: Path) -> dict:
     print("\n[Step 1] Transcribing audio...")
     transcript_data = transcribe(video_path, output_dir)
 
-    print("\n[Step 1] Extracting keyframes...")
-    frames = extract_keyframes(video_path, output_dir)
+    print("\n[Step 1] Detecting scenes and extracting keyframes...")
+    scenes_meta = detect_scenes(video_path, output_dir)
 
+    frames = sorted((output_dir / "frames").glob("frame_*.png"))
     result = {
         "video_path": str(video_path),
         "transcript_json": str(output_dir / "transcript.json"),
         "transcript_txt": str(output_dir / "transcript.txt"),
+        "scenes_json": str(output_dir / "scenes.json"),
         "frames": [str(f) for f in frames],
         "frame_count": len(frames),
+        "scene_count": len(scenes_meta),
     }
 
     print(f"\n[Step 1] Done. Output in: {output_dir}")
-    print(f"         Frames: {len(frames)} | Transcript words: {len(transcript_data.get('text','').split())}")
+    print(f"         Scenes: {len(scenes_meta)} | Transcript words: {len(transcript_data.get('text','').split())}")
     return result

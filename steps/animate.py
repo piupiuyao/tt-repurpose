@@ -9,7 +9,7 @@ from pathlib import Path
 XAI_BASE = "https://api.x.ai/v1"
 
 
-def submit_video(prompt: str, image_path: Path = None) -> str:
+def submit_video(prompt: str, image_path: Path = None, duration: int = None) -> str:
     headers = {
         "Authorization": f"Bearer {os.environ['XAI_API_KEY']}",
         "Content-Type": "application/json",
@@ -18,6 +18,8 @@ def submit_video(prompt: str, image_path: Path = None) -> str:
         "model": "grok-imagine-video",
         "prompt": prompt,
     }
+    if duration:
+        payload["duration"] = duration
     if image_path and image_path.exists():
         with open(image_path, "rb") as f:
             b64 = base64.b64encode(f.read()).decode()
@@ -86,11 +88,12 @@ def run(output_dir: Path) -> dict:
         # Use corresponding scene image as reference
         scene_image = images_dir / f"scene_{beat_num:02d}.png"
 
-        print(f"  >> Beat {beat_num}: {beat['beat_name']}")
+        duration = beat.get("duration")
+        print(f"  >> Beat {beat_num}: {beat['beat_name']}" + (f" ({duration}s)" if duration else ""))
         print(f"     Prompt: {grok_prompt[:80]}...")
 
         try:
-            request_id = submit_video(grok_prompt, scene_image)
+            request_id = submit_video(grok_prompt, scene_image, duration)
             print(f"     Submitted: {request_id}")
             video_url = poll_video(request_id)
             download_video(video_url, video_path)

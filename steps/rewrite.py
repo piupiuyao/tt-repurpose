@@ -37,12 +37,13 @@ def run(output_dir: Path, style: str = "fruit-drama") -> dict:
         style_config.get("characters", {}).get("males", [])
     )
     char_summary = "\n".join([
-        f"{c['name']} — {c.get('family_role', c.get('role', '?'))} ({c.get('food_type', '')}): {c.get('description', '')[:100]}"
+        f"{c['name']} — {c.get('role', '?')} ({c.get('food_type', '')}): {c.get('description', '')[:100]}"
         for c in all_chars
     ])
 
+    num_beats = len(beats_list) if isinstance(beats_list, list) else len(beats_list.get("beats", []))
     user_message = (
-        f"ORIGINAL 7-BEAT STORY (keep this plot EXACTLY — only swap the characters):\n{json.dumps(beats_list, indent=2)}\n\n"
+        f"ORIGINAL {num_beats}-BEAT STORY (keep this plot EXACTLY — only swap the characters, output EXACTLY {num_beats} beats):\n{json.dumps(beats_list, indent=2)}\n\n"
         f"NEW CHARACTERS TO USE:\n{char_summary}"
     )
 
@@ -53,7 +54,7 @@ def run(output_dir: Path, style: str = "fruit-drama") -> dict:
     )
     response = client.chat.completions.create(
         model="anthropic/claude-opus-4-5",
-        max_tokens=8000,
+        max_tokens=max(16000, num_beats * 1500),
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},

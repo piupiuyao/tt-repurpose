@@ -23,7 +23,7 @@ STYLES = {
 # ── Session state defaults ───────────────────────────────────────────────────
 def _init():
     defaults = {
-        "stage": "input",          # input | frames | script | images | animate | done
+        "stage": "input",          # input | frames | script | portraits | scenes | animate | done
         "output_dir": None,
         "style": "candy-drama",
         "url": "",
@@ -94,6 +94,57 @@ def rewrite_prompt_with_feedback(original_prompt: str, feedback: str) -> str:
     )
     return response.choices[0].message.content.strip()
 
+def update_character_description(char_name: str, feedback: str):
+    """Use Claude to rewrite a character's description based on user feedback, then update style_config.json."""
+    import os
+    from openai import OpenAI
+    config_path = out_dir() / "style_config.json"
+    with open(config_path) as f:
+        cfg = json.load(f)
+
+    # Find character and get current description
+    target_char = None
+    for group in ("females", "males"):
+        for c in cfg.get("characters", {}).get(group, []):
+            if c["name"] == char_name:
+                target_char = c
+                break
+
+    if not target_char:
+        return
+
+    client = OpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=os.environ["OPENROUTER_API_KEY"],
+    )
+    response = client.chat.completions.create(
+        model="anthropic/claude-sonnet-4-5",
+        max_tokens=512,
+        messages=[
+            {"role": "system", "content": (
+                "You rewrite character descriptions for AI image generation. "
+                "Incorporate the user's feedback into the existing description. "
+                "CRITICAL RULE: every character MUST have a clearly visible FACE with BIG expressive cartoon eyes, eyebrows, a small nose, and a mouth/smile. "
+                "The food/flower/object element sits on TOP of the head like a hat or frames the face — it must NEVER cover or replace the face. "
+                "Return ONLY the new description text, nothing else."
+            )},
+            {"role": "user", "content": (
+                f"CURRENT DESCRIPTION:\n{target_char['description']}\n\n"
+                f"USER FEEDBACK:\n{feedback}\n\n"
+                "Rewrite the description incorporating this feedback."
+            )},
+        ],
+    )
+    new_desc = response.choices[0].message.content.strip()
+    target_char["description"] = new_desc
+
+    with open(config_path, "w") as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+
+    return new_desc
+
+
+
 def update_script_prompt(beat_num: int, prompt_key: str, new_prompt: str):
     """Update a specific beat's prompt in script.json and session state."""
     script_path = out_dir() / "script.json"
@@ -113,12 +164,21 @@ with st.sidebar:
     st.caption("Turn any TikTok into a new AI drama video")
     st.divider()
 
-    stages = ["input", "frames", "script", "images", "animate", "done"]
-    labels = ["① URL & Style", "② Select Frames", "③ Script", "④ Images", "⑤ Animate", "⑥ Final Video"]
+    stages = ["input", "frames", "script", "portraits", "scenes", "animate", "done"]
+    labels = ["① URL & Style", "② Select Frames", "③ Script", "④ Portraits", "⑤ Scenes", "⑥ Animate", "⑦ Final Video"]
+    # Track the furthest stage reached so we know which are "completed"
+    if "max_stage" not in st.session_state:
+        st.session_state.max_stage = 0
     current = stages.index(st.session_state.stage) if st.session_state.stage in stages else 0
+    st.session_state.max_stage = max(st.session_state.max_stage, current)
     for i, (s, l) in enumerate(zip(stages, labels)):
-        icon = "✅" if i < current else ("▶️" if i == current else "⏳")
-        st.write(f"{icon} {l}")
+        icon = "✅" if i < st.session_state.max_stage else ("▶️" if i == current else "⏳")
+        if i <= st.session_state.max_stage:
+            if st.button(f"{icon} {l}", key=f"nav_{s}"):
+                st.session_state.stage = s
+                st.rerun()
+        else:
+            st.write(f"{icon} {l}")
 
     if st.session_state.output_dir:
         st.divider()
@@ -136,8 +196,10 @@ with st.sidebar:
                 stage = "done"
             elif (d / "videos").exists() and any((d / "videos").glob("*.mp4")):
                 stage = "animate"
-            elif (d / "images").exists() and any((d / "images").glob("*.png")):
-                stage = "images"
+            elif (d / "images").exists() and any((d / "images").glob("scene_*.png")):
+                stage = "scenes"
+            elif (d / "images").exists() and any((d / "images").glob("char_*.png")):
+                stage = "portraits"
             elif (d / "script.json").exists():
                 stage = "script"
             if (d / "script.json").exists():
@@ -177,11 +239,16 @@ if st.session_state.stage == "input":
             if rc == 0:
                 status.update(label="✅ Extraction complete!", state="complete")
                 st.session_state.stage = "frames"
-                # Init all frames as selected
+                # Init all frames as UNselected — user picks key scenes
                 frames_dir = out_dir() / "frames"
                 st.session_state.frame_sel = {
                     f.name: True for f in sorted(frames_dir.glob("frame_*.png"))
                 }
+                # Load scene metadata if available
+                scenes_json = out_dir() / "scenes.json"
+                if scenes_json.exists():
+                    with open(scenes_json) as f:
+                        st.session_state.scenes_meta = json.load(f)
                 st.rerun()
             else:
                 status.update(label="❌ Extraction failed", state="error")
@@ -190,32 +257,59 @@ if st.session_state.stage == "input":
 # STAGE 2 — Frame Selection
 # ══════════════════════════════════════════════════════════════════════════════
 elif st.session_state.stage == "frames":
-    st.title("Step 2 — Select Reference Frames")
-    st.caption("Keep only the clearest frames. These will be used as style reference for image generation.")
+    st.title("Step 2 — Select Scenes")
+    st.caption("Each frame represents an auto-detected scene from the original video. Select the scenes you want to keep. Each selected scene = one beat in your new video.")
 
     frames_dir = out_dir() / "frames"
     all_frames = sorted(frames_dir.glob("frame_*.png"))
 
-    # Display grid — 4 columns, checkboxes update session_state directly via key
+    # Load scene metadata for duration display
+    scenes_meta = st.session_state.get("scenes_meta", [])
+    if not scenes_meta:
+        scenes_json = out_dir() / "scenes.json"
+        if scenes_json.exists():
+            with open(scenes_json) as f:
+                scenes_meta = json.load(f)
+            st.session_state.scenes_meta = scenes_meta
+    scene_by_frame = {s["frame"]: s for s in scenes_meta}
+
+    # Display grid — 4 columns, checkboxes default to unselected
     cols = st.columns(4)
     for i, frame_path in enumerate(all_frames):
         key = f"frame_{frame_path.name}"
-        # Init default
         if key not in st.session_state:
             st.session_state[key] = True
+        scene_info = scene_by_frame.get(frame_path.name, {})
+        dur = scene_info.get("duration", 0)
+        label = f"Scene {i+1} ({dur:.1f}s)" if dur else f"Scene {i+1}"
         with cols[i % 4]:
             st.image(str(frame_path), use_container_width=True)
-            st.checkbox("Keep", key=key)
+            st.checkbox(label, key=key)
 
-    selected_count = sum(1 for f in all_frames if st.session_state.get(f"frame_{f.name}", True))
-    st.caption(f"{selected_count} / {len(all_frames)} frames selected")
+    selected_count = sum(1 for f in all_frames if st.session_state.get(f"frame_{f.name}", False))
+    selected_dur = sum(
+        scene_by_frame.get(f.name, {}).get("duration", 0)
+        for f in all_frames if st.session_state.get(f"frame_{f.name}", False)
+    )
+    st.info(f"✅ {selected_count} scenes selected ({selected_dur:.1f}s total) = {selected_count} beats will be generated")
 
     st.divider()
     if st.button("✅ Confirm & Analyze Script", type="primary", disabled=selected_count == 0):
-        # Delete unselected frames
+        # Delete unselected frames and update scenes.json to only keep selected
+        selected_scenes = []
         for frame_path in all_frames:
-            if not st.session_state.get(f"frame_{frame_path.name}", True):
+            if not st.session_state.get(f"frame_{frame_path.name}", False):
                 frame_path.unlink(missing_ok=True)
+            else:
+                scene_info = scene_by_frame.get(frame_path.name, {})
+                if scene_info:
+                    selected_scenes.append(scene_info)
+
+        # Overwrite scenes.json with only selected scenes
+        if selected_scenes:
+            scenes_json = out_dir() / "scenes.json"
+            with open(scenes_json, "w") as f:
+                json.dump(selected_scenes, f, indent=2)
 
         out_placeholder = st.empty()
         out_placeholder.info("🔍 Analyzing story beats and detecting characters...")
@@ -243,7 +337,9 @@ elif st.session_state.stage == "script":
     beats = script.get("beats", [])
 
     for beat in beats:
-        with st.expander(f"Beat {beat['beat_number']}: {beat['beat_name']} ({beat.get('emotion', '')})", expanded=True):
+        dur = beat.get('duration', 0)
+        dur_label = f" | {dur}s" if dur else ""
+        with st.expander(f"Beat {beat['beat_number']}: {beat['beat_name']} ({beat.get('emotion', '')}){dur_label}", expanded=True):
             st.markdown("**Dialogue:**")
             for line in beat.get("dialogue", []):
                 st.markdown(f"**{line['character']}:** {line['line']}")
@@ -255,46 +351,121 @@ elif st.session_state.stage == "script":
                 st.caption(beat["grok_prompt"])
 
     st.divider()
-    if st.button("🎨 Generate Images", type="primary"):
-        st.session_state.stage = "images"
+    if st.button("🎨 Generate Portraits", type="primary"):
+        st.session_state.stage = "portraits"
         st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STAGE 4 — Image Generation
+# STAGE 4 — Character Portraits
 # ══════════════════════════════════════════════════════════════════════════════
-elif st.session_state.stage == "images":
-    st.title("Step 4 — Generate Images")
+elif st.session_state.stage == "portraits":
+    st.title("Step 4 — Character Portraits")
+    st.caption("Review character portraits. Regenerate any you don't like before generating scene images.")
 
     images_dir = out_dir() / "images"
+    portraits = sorted(images_dir.glob("char_*.png")) if images_dir.exists() else []
 
-    if not images_dir.exists() or not list(images_dir.glob("*.png")):
-        with st.status("Generating character portraits and scene images…", expanded=True) as status:
+    if not portraits:
+        with st.status("Generating character portraits…", expanded=True) as status:
             placeholder = st.empty()
-            rc = run_cmd(repurpose_cmd("images"), placeholder)
+            rc = run_cmd(repurpose_cmd("portraits"), placeholder)
             if rc == 0:
-                status.update(label="✅ Images generated!", state="complete")
+                status.update(label="✅ Portraits generated!", state="complete")
                 st.rerun()
             else:
-                status.update(label="❌ Image generation failed", state="error")
+                status.update(label="❌ Portrait generation failed", state="error")
     else:
-        # Show portraits
-        portraits = sorted(images_dir.glob("char_*.png"))
-        scenes = sorted(images_dir.glob("scene_*.png"))
+        # Load style config for character info
+        config_path = out_dir() / "style_config.json"
+        char_info = {}
+        if config_path.exists():
+            with open(config_path) as f:
+                cfg = json.load(f)
+            for c in cfg.get("characters", {}).get("females", []) + cfg.get("characters", {}).get("males", []):
+                key = f"char_{c['name'].lower().replace(' ', '_')}.png"
+                char_info[key] = c
 
-        st.subheader(f"🧑 Character Portraits ({len(portraits)})")
-        p_cols = st.columns(min(len(portraits), 4))
+        # Display portraits with feedback boxes
+        redo_target = None
         for i, p in enumerate(portraits):
-            with p_cols[i % 4]:
-                name = p.stem.replace("char_", "").replace("_", " ").title()
-                st.image(str(p), caption=name, use_container_width=True)
+            info = char_info.get(p.name, {})
+            name = info.get("name", p.stem.replace("char_", "").replace("_", " ").title())
+            food_type = info.get("food_type", "")
+            role = info.get("role", info.get("family_role", ""))
+            caption = f"{name} ({food_type}) — {role}" if food_type else name
 
-        # Get beats for captions
+            col_img, col_feedback, col_btn = st.columns([2, 3, 1])
+            with col_img:
+                st.image(str(p), caption=caption, use_container_width=True)
+            with col_feedback:
+                st.text_area(
+                    "Feedback",
+                    key=f"feedback_portrait_{p.stem}",
+                    height=100,
+                    label_visibility="collapsed",
+                    placeholder="修改意见（如：换成蓝色、表情凶一点、花小一些）留空则直接重新生成",
+                )
+            with col_btn:
+                st.write("")
+                st.write("")
+                if st.button("🔁 Redo", key=f"redo_portrait_{p.stem}"):
+                    redo_target = (p, name)
+
+        # Handle redo after all widgets are rendered
+        if redo_target:
+            target_path, target_name = redo_target
+            feedback_text = st.session_state.get(f"feedback_portrait_{target_path.stem}", "").strip()
+            if feedback_text:
+                with st.status(f"Updating {target_name} description…", expanded=True):
+                    update_character_description(target_name, feedback_text)
+                    st.write(f"✅ Description updated based on feedback")
+            target_path.unlink()
+            with st.status(f"Regenerating {target_name}…", expanded=True) as status:
+                placeholder = st.empty()
+                rc = run_cmd(repurpose_cmd("portraits"), placeholder)
+                if rc == 0:
+                    status.update(label=f"✅ {target_name} regenerated!", state="complete")
+                else:
+                    status.update(label=f"❌ Failed to regenerate {target_name}", state="error")
+            time.sleep(1)
+            st.rerun()
+
+        st.divider()
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔁 Regenerate All Portraits"):
+                for p in portraits:
+                    p.unlink()
+                st.rerun()
+        with col2:
+            if st.button("✅ Confirm & Generate Scenes", type="primary"):
+                st.session_state.stage = "scenes"
+                st.rerun()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STAGE 5 — Scene Images
+# ══════════════════════════════════════════════════════════════════════════════
+elif st.session_state.stage == "scenes":
+    st.title("Step 5 — Scene Images")
+
+    images_dir = out_dir() / "images"
+    scenes = sorted(images_dir.glob("scene_*.png")) if images_dir.exists() else []
+
+    if not scenes:
+        with st.status("Generating scene images…", expanded=True) as status:
+            placeholder = st.empty()
+            rc = run_cmd(repurpose_cmd("scenes"), placeholder)
+            if rc == 0:
+                status.update(label="✅ Scene images generated!", state="complete")
+                st.rerun()
+            else:
+                status.update(label="❌ Scene generation failed", state="error")
+    else:
         beats_data = (st.session_state.script or {}).get("beats", [])
         beat_map = {b["beat_number"]: b for b in beats_data}
 
         st.subheader(f"🎬 Scene Images ({len(scenes)} / {len(beats_data)})")
         for s in scenes:
-            # Parse beat number from filename (scene_01.png → 1)
             beat_num = int(s.stem.split("_")[1])
             beat = beat_map.get(beat_num, {})
             caption = f"Scene {beat_num}: {beat.get('beat_name','')}"
@@ -323,24 +494,24 @@ elif st.session_state.stage == "images":
                     s.unlink()
                     out = st.empty()
                     out.info(f"⏳ Regenerating scene {beat_num}...")
-                    run_cmd(repurpose_cmd("images"), out)
+                    run_cmd(repurpose_cmd("scenes"), out)
                     st.rerun()
 
-        # Show missing scenes (if any failed)
         existing_nums = {int(s.stem.split("_")[1]) for s in scenes}
         missing = [b["beat_number"] for b in beats_data if b["beat_number"] not in existing_nums]
         if missing:
             st.warning(f"Missing scenes: {missing} — click below to generate them")
             if st.button("⚡ Generate Missing Scenes"):
                 out = st.empty()
-                run_cmd(repurpose_cmd("images"), out)
+                run_cmd(repurpose_cmd("scenes"), out)
                 st.rerun()
 
         st.divider()
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("🔁 Regenerate All Images"):
-                shutil.rmtree(images_dir)
+            if st.button("🔁 Regenerate All Scenes"):
+                for s in scenes:
+                    s.unlink()
                 st.rerun()
         with col2:
             if st.button("🎬 Animate Scenes", type="primary"):
@@ -354,95 +525,82 @@ elif st.session_state.stage == "animate":
     st.title("Step 5 — Animate Scenes")
 
     videos_dir = out_dir() / "videos"
-    final_path = out_dir() / "final.mp4"
 
-    if final_path.exists():
-        st.success("✅ Final video is ready!")
-        st.video(str(final_path))
-        st.divider()
-        with open(final_path, "rb") as f:
-            st.download_button("⬇️ Download final.mp4", f, file_name="final.mp4", mime="video/mp4")
-        if st.button("🔁 Start New Video"):
-            for key in list(st.session_state.keys()):
-                del st.session_state[key]
-            st.rerun()
+    existing = list(videos_dir.glob("scene_*.mp4")) if videos_dir.exists() else []
+    beats = (st.session_state.script or {}).get("beats", [])
 
+    if not existing:
+        with st.status("Generating videos with Grok… (this takes ~5 min)", expanded=True) as status:
+            placeholder = st.empty()
+            rc = run_cmd(repurpose_cmd("animate"), placeholder)
+            if rc == 0:
+                status.update(label="✅ Videos generated!", state="complete")
+                st.rerun()
+            else:
+                status.update(label="❌ Animation failed", state="error")
     else:
-        existing = list(videos_dir.glob("scene_*.mp4")) if videos_dir.exists() else []
-        beats = (st.session_state.script or {}).get("beats", [])
+        beat_map = {b["beat_number"]: b for b in beats}
+        existing_sorted = sorted(existing)
 
-        if not existing:
-            with st.status("Generating videos with Grok… (this takes ~5 min)", expanded=True) as status:
+        st.subheader(f"🎬 Generated Scenes ({len(existing)}/{len(beats)})")
+        for v in existing_sorted:
+            beat_num = int(v.stem.split("_")[1])
+            beat = beat_map.get(beat_num, {})
+            caption = f"Scene {beat_num}: {beat.get('beat_name', '')}"
+
+            col_vid, col_feedback, col_btn = st.columns([4, 3, 1])
+            with col_vid:
+                st.video(str(v))
+                st.caption(caption)
+            with col_feedback:
+                st.text_area(
+                    "Feedback",
+                    key=f"feedback_vid_{beat_num}",
+                    height=100,
+                    label_visibility="collapsed",
+                    placeholder="修改意见，留空则直接重新生成",
+                )
+            with col_btn:
+                st.write("")
+                st.write("")
+                if st.button("🔁 Redo", key=f"regen_vid_{beat_num}"):
+                    feedback_text = st.session_state.get(f"feedback_vid_{beat_num}", "").strip()
+                    if feedback_text:
+                        original_prompt = beat.get("grok_prompt", "")
+                        with st.spinner(f"Rewriting prompt for video {beat_num}..."):
+                            new_prompt = rewrite_prompt_with_feedback(original_prompt, feedback_text)
+                        update_script_prompt(beat_num, "grok_prompt", new_prompt)
+                    v.unlink()
+                    out = st.empty()
+                    out.info(f"⏳ Regenerating video {beat_num}...")
+                    run_cmd(repurpose_cmd("animate"), out)
+                    st.rerun()
+
+        # Show missing videos
+        existing_nums = {int(v.stem.split("_")[1]) for v in existing}
+        missing = [b["beat_number"] for b in beats if b["beat_number"] not in existing_nums]
+        if missing:
+            st.warning(f"Missing videos: {missing}")
+
+        if len(existing) < len(beats):
+            if st.button("🔁 Retry Missing Scenes"):
+                with st.status("Retrying missing scenes…", expanded=True) as status:
+                    placeholder = st.empty()
+                    run_cmd(repurpose_cmd("animate"), placeholder)
+                    status.update(label="Done", state="complete")
+                    st.rerun()
+
+        st.divider()
+        if st.button("✂️ Assemble Final Video with Subtitles", type="primary"):
+            with st.status("Assembling and adding subtitles…", expanded=True) as status:
                 placeholder = st.empty()
-                rc = run_cmd(repurpose_cmd("animate"), placeholder)
+                rc = run_cmd(repurpose_cmd("assemble"), placeholder)
                 if rc == 0:
-                    status.update(label="✅ Videos generated!", state="complete")
+                    status.update(label="✅ Final video ready!", state="complete")
+                    st.session_state.stage = "done"
                     st.rerun()
                 else:
-                    status.update(label="❌ Animation failed", state="error")
-        else:
-            beat_map = {b["beat_number"]: b for b in beats}
-            existing_sorted = sorted(existing)
-
-            st.subheader(f"🎬 Generated Scenes ({len(existing)}/{len(beats)})")
-            for v in existing_sorted:
-                beat_num = int(v.stem.split("_")[1])
-                beat = beat_map.get(beat_num, {})
-                caption = f"Scene {beat_num}: {beat.get('beat_name', '')}"
-
-                col_vid, col_feedback, col_btn = st.columns([4, 3, 1])
-                with col_vid:
-                    st.video(str(v))
-                    st.caption(caption)
-                with col_feedback:
-                    st.text_area(
-                        "Feedback",
-                        key=f"feedback_vid_{beat_num}",
-                        height=100,
-                        label_visibility="collapsed",
-                        placeholder="修改意见，留空则直接重新生成",
-                    )
-                with col_btn:
-                    st.write("")
-                    st.write("")
-                    if st.button("🔁 Redo", key=f"regen_vid_{beat_num}"):
-                        feedback_text = st.session_state.get(f"feedback_vid_{beat_num}", "").strip()
-                        if feedback_text:
-                            original_prompt = beat.get("grok_prompt", "")
-                            with st.spinner(f"Rewriting prompt for video {beat_num}..."):
-                                new_prompt = rewrite_prompt_with_feedback(original_prompt, feedback_text)
-                            update_script_prompt(beat_num, "grok_prompt", new_prompt)
-                        v.unlink()
-                        out = st.empty()
-                        out.info(f"⏳ Regenerating video {beat_num}...")
-                        run_cmd(repurpose_cmd("animate"), out)
-                        st.rerun()
-
-            # Show missing videos
-            existing_nums = {int(v.stem.split("_")[1]) for v in existing}
-            missing = [b["beat_number"] for b in beats if b["beat_number"] not in existing_nums]
-            if missing:
-                st.warning(f"Missing videos: {missing}")
-
-            if len(existing) < len(beats):
-                if st.button("🔁 Retry Missing Scenes"):
-                    with st.status("Retrying missing scenes…", expanded=True) as status:
-                        placeholder = st.empty()
-                        run_cmd(repurpose_cmd("animate"), placeholder)
-                        status.update(label="Done", state="complete")
-                        st.rerun()
-
-            st.divider()
-            if st.button("✂️ Assemble Final Video with Subtitles", type="primary"):
-                with st.status("Assembling and adding subtitles…", expanded=True) as status:
-                    placeholder = st.empty()
-                    rc = run_cmd(repurpose_cmd("assemble"), placeholder)
-                    if rc == 0:
-                        status.update(label="✅ Final video ready!", state="complete")
-                        st.session_state.stage = "done"
-                        st.rerun()
-                    else:
-                        status.update(label="❌ Assembly failed", state="error")
+                    status.update(label="❌ Assembly failed", state="error")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STAGE 6 — Done

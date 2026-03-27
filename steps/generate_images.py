@@ -23,18 +23,8 @@ def save_image_from_response(response, path: Path) -> bool:
     return False
 
 
-def run(output_dir: Path, style: str = "fruit-drama") -> dict:
-    script_path = output_dir / "script.json"
-    if not script_path.exists():
-        raise FileNotFoundError(f"script.json not found — run rewrite first")
-
-    with open(script_path) as f:
-        script = json.load(f)
-
-    images_dir = output_dir / "images"
-    images_dir.mkdir(exist_ok=True)
-
-    # Prefer auto-detected config, fall back to static style config
+def _load_config(output_dir: Path, style: str = "fruit-drama"):
+    """Load style config and build character metadata."""
     dynamic_config = output_dir / "style_config.json"
     if dynamic_config.exists():
         config_path = dynamic_config
@@ -44,7 +34,6 @@ def run(output_dir: Path, style: str = "fruit-drama") -> dict:
     with open(config_path) as f:
         style_config = json.load(f)
 
-    # Build ref frame mapping from config
     frames_dir = output_dir / "frames"
     all_frames = sorted(frames_dir.glob("frame_*.png"))
     default_female = all_frames[0].name if all_frames else "frame_0001.png"
@@ -66,20 +55,23 @@ def run(output_dir: Path, style: str = "fruit-drama") -> dict:
         style_config["characters"]["males"]
     )
 
-    frames_dir = output_dir / "frames"
     female_ref = load_image_part(frames_dir / FEMALE_REF_FRAME)
     male_ref   = load_image_part(frames_dir / MALE_REF_FRAME)
+
+    return style_config, all_characters, CHARACTER_FRAME_HINT, female_ref, male_ref
+
+
+def run_portraits(output_dir: Path, style: str = "fruit-drama") -> dict:
+    """Generate character portraits only."""
+    images_dir = output_dir / "images"
+    images_dir.mkdir(exist_ok=True)
+
+    style_config, all_characters, CHARACTER_FRAME_HINT, female_ref, male_ref = _load_config(output_dir, style)
 
     client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
     model = "models/gemini-2.5-flash-image"
     gen_config = types.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"])
 
-    results = {}
-
-    # ─────────────────────────────────────────────
-    # Step 4a: Generate character portraits
-    # Each portrait uses the matching reference frame
-    # ─────────────────────────────────────────────
     print("\n[Step 4a] Generating character reference portraits...")
     char_images = {}
 
@@ -119,13 +111,38 @@ def run(output_dir: Path, style: str = "fruit-drama") -> dict:
             print(f"     ERROR for {name}: {e}")
         time.sleep(3)
 
-    results["character_portraits"] = {k: str(v) for k, v in char_images.items()}
+    print(f"\n[Step 4a] Done. {len(char_images)} portraits saved.")
+    return {"character_portraits": {k: str(v) for k, v in char_images.items()}}
 
-    # ─────────────────────────────────────────────
-    # Step 4b: Generate scene images
-    # Each scene is a FRESH independent request — no chat history
-    # Only relevant character portraits are passed each time
-    # ─────────────────────────────────────────────
+
+def run_scenes(output_dir: Path, style: str = "fruit-drama") -> dict:
+    """Generate scene images only. Requires portraits to exist."""
+    script_path = output_dir / "script.json"
+    if not script_path.exists():
+        raise FileNotFoundError(f"script.json not found — run rewrite first")
+
+    with open(script_path) as f:
+        script = json.load(f)
+
+    images_dir = output_dir / "images"
+    images_dir.mkdir(exist_ok=True)
+
+    style_config, all_characters, CHARACTER_FRAME_HINT, female_ref, male_ref = _load_config(output_dir, style)
+
+    # Load existing portraits
+    char_images = {}
+    for char in all_characters:
+        name = char["name"]
+        portrait_path = images_dir / f"char_{name.lower().replace(' ', '_')}.png"
+        if portrait_path.exists():
+            char_images[name] = portrait_path
+    if not char_images:
+        raise FileNotFoundError("No character portraits found — run portraits first")
+
+    client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+    model = "models/gemini-2.5-flash-image"
+    gen_config = types.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"])
+
     print("\n[Step 4b] Generating scene images (fresh request per scene)...")
 
     beats = script.get("beats", [])
@@ -157,9 +174,7 @@ def run(output_dir: Path, style: str = "fruit-drama") -> dict:
 
         print(f"  >> Generating scene {beat_num}: {beat['beat_name']} ({', '.join(scene_chars)})...")
 
-        # Fresh request — portraits + prompt only, no history
         char_names_str = ", ".join(scene_chars)
-        # Build per-character identity reminder to prevent mixing up similar-looking characters
         identity_reminders = []
         for name in scene_chars:
             hint = CHARACTER_FRAME_HINT.get(name, (None, None))[1]
@@ -169,9 +184,15 @@ def run(output_dir: Path, style: str = "fruit-drama") -> dict:
 
         contents = []
         for name in scene_chars:
-            contents.append(f"{name} (reference portrait — match exactly):")
+            char_desc = ""
+            for c in all_characters:
+                if c["name"] == name:
+                    char_desc = c.get("description", "")
+                    break
+            contents.append(f"{name} — reference portrait. Copy this character EXACTLY as shown (head shape, texture, color, outfit):")
             contents.append(load_image_part(char_images[name]))
-        # Build size consistency instruction
+            if char_desc:
+                contents.append(f"Character details for {name}: {char_desc}")
         child_chars = [n for n in scene_chars if CHARACTER_FRAME_HINT.get(n, (None,))[0] == "child"]
         adult_chars = [n for n in scene_chars if n not in child_chars]
         size_note = "IMPORTANT size consistency: all adult characters are the same full height as in portraits. "
@@ -179,10 +200,13 @@ def run(output_dir: Path, style: str = "fruit-drama") -> dict:
             size_note += f"Child characters ({', '.join(child_chars)}) are exactly half the height of adults — small, compact, child-sized bodies. "
 
         contents.append(
-            f"Keep the exact same {char_names_str} characters from the reference portraits above. "
-            f"IMPORTANT character identities: {identity_str}. Do NOT mix up their head shapes. "
+            f"STRICT CHARACTER CONSISTENCY: Copy the EXACT appearance of {char_names_str} from the reference portraits above — "
+            f"same head shape, same head COLOR, same head TEXTURE/PATTERN (spots, bumps, seeds, etc.), same outfit/clothing, same accessories. "
+            f"The reference portraits are the GROUND TRUTH — if the portrait shows a textured head with dots, the scene MUST show the same texture. "
+            f"Do NOT simplify or smooth out any details from the portraits. "
+            f"Character identities: {identity_str}. Do NOT mix up characters. "
             f"{size_note}"
-            f"{image_prompt} "
+            f"SCENE TO GENERATE: {image_prompt} "
             f"Hyperrealistic 3D render, warm sunny lighting, 9:16 vertical."
         )
 
@@ -199,11 +223,17 @@ def run(output_dir: Path, style: str = "fruit-drama") -> dict:
             print(f"     ERROR for beat {beat_num}: {e}")
         time.sleep(3)
 
-    results["scene_images"] = {k: str(v) for k, v in scene_images.items()}
+    print(f"\n[Step 4b] Done. {len(scene_images)} scenes saved.")
+    return {"scene_images": {k: str(v) for k, v in scene_images.items()}}
+
+
+def run(output_dir: Path, style: str = "fruit-drama") -> dict:
+    """Generate both portraits and scenes (backward compatible)."""
+    results = run_portraits(output_dir, style)
+    results.update(run_scenes(output_dir, style))
 
     manifest_path = output_dir / "images_manifest.json"
     with open(manifest_path, "w") as f:
         json.dump(results, f, indent=2)
 
-    print(f"\n[Step 4] Done. {len(char_images)} portraits + {len(scene_images)} scenes saved.")
     return results
