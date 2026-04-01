@@ -13,7 +13,8 @@ load_dotenv()
 @click.option("--step", default="all", show_default=True,
               type=click.Choice(["all", "extract", "analyze", "rewrite", "portraits", "scenes", "images", "animate", "assemble"]),
               help="Run only a specific step")
-def main(url: str, style: str, output: str, step: str):
+@click.option("--clone", is_flag=True, default=False, help="Clone mode: keep original characters instead of generating new ones")
+def main(url: str, style: str, output: str, step: str, clone: bool):
     """TikTok AI Video Repurpose Tool — turn any TikTok into a new AI drama video."""
     output_dir = Path(output)
 
@@ -23,7 +24,7 @@ def main(url: str, style: str, output: str, step: str):
 
     if step in ("all", "analyze"):
         from steps.analyze import run as analyze
-        analyze(output_dir)
+        analyze(output_dir, keep_original=clone)
 
     if step in ("all", "rewrite"):
         from steps.rewrite import run as rewrite

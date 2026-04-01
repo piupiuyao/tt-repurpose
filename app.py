@@ -29,6 +29,7 @@ def _init():
         "url": "",
         "frame_sel": {},           # {filename: bool}
         "script": None,
+        "clone_mode": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -58,13 +59,16 @@ def run_cmd(cmd: list, placeholder) -> int:
     return process.returncode
 
 def repurpose_cmd(step: str) -> list:
-    return [
+    cmd = [
         sys.executable, "repurpose.py",
         "--url", st.session_state.url,
         "--output", st.session_state.output_dir,
         "--style", st.session_state.style,
         "--step", step,
     ]
+    if st.session_state.get("clone_mode", False):
+        cmd.append("--clone")
+    return cmd
 
 def rewrite_prompt_with_feedback(original_prompt: str, feedback: str) -> str:
     """Call Claude via OpenRouter to rewrite a prompt incorporating user feedback."""
@@ -222,6 +226,8 @@ if st.session_state.stage == "input":
 
     url = st.text_input("TikTok URL", value=st.session_state.url, placeholder="https://www.tiktok.com/@...")
     out_name = st.text_input("Output folder name", value=f"output_{int(time.time())}")
+    clone_mode = st.checkbox("🔁 Clone mode (keep original characters & plot, just regenerate)", value=st.session_state.get("clone_mode", False))
+    st.session_state.clone_mode = clone_mode
     st.caption("Characters will be auto-detected from the video frames — no style config needed.")
 
     if st.button("🚀 Extract Video", type="primary", disabled=not url.strip() or st.session_state.get("running", False)):

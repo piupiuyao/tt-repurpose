@@ -17,8 +17,9 @@ def _load_image_b64(path: Path, max_width: int = 768) -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
-def detect_characters(output_dir: Path) -> dict:
-    """Analyze video frames to extract family structure + art style, then generate a NEW cast of different food types."""
+def detect_characters(output_dir: Path, keep_original: bool = False) -> dict:
+    """Analyze video frames to extract family structure + art style, then generate a NEW cast of different food types.
+    If keep_original=True, keep the original characters instead of generating new ones (clone mode)."""
     import re
     frames_dir = output_dir / "frames"
     frames = sorted(frames_dir.glob("frame_*.png"))
@@ -49,12 +50,12 @@ def detect_characters(output_dir: Path) -> dict:
             "text": (
                 "These are frames from an AI-generated TikTok food/candy drama video.\n\n"
                 "Extract:\n"
-                "1. ALL CHARACTERS: Count EVERY visually distinct character across ALL frames. Characters with different head shapes, colors, or outfits are SEPARATE characters even if they have similar roles. Do NOT merge characters — if you see 3 different male characters, list all 3. For each: role (free-form, describe their role in the story in 1-3 words, e.g. 'host', 'main love interest', 'rival', 'shy newcomer'), gender, age (adult/child), brief_description (e.g. 'green spiky-haired man in blazer')\n"
+                "1. MAIN CHARACTERS ONLY: Identify ONLY the characters who play a role in the story (have dialogue, drive the plot, or appear in multiple scenes). IGNORE background extras, classroom fillers, crowd members, or any character that only appears blurred/tiny in the background. For each main character: role (free-form, describe their role in the story in 1-3 words, e.g. 'birth mother', 'adoptive father', 'school bully'), gender, age (adult/child), brief_description (e.g. 'green spiky-haired man in blazer')\n"
                 "2. VISUAL STYLE: describe the render quality precisely — is it photorealistic, Pixar-style, cartoon? What is the lighting like? Be specific so image generation can match it exactly.\n"
                 "3. ORIGINAL FOOD TYPES: list ALL food/candy/plant types used — one per character (to avoid copying them)\n"
                 "4. CHARACTER CATEGORY: what type of objects are the characters? Examples: fruit, candy, vegetable, dessert, flower, plant, phone/electronics, household_item, toy, etc. Be specific.\n"
                 "5. Best ref frames: which frame best shows female characters? male characters?\n\n"
-                "CRITICAL: Do NOT undercount characters. Look at EVERY frame carefully. If the video has 8 distinct characters, list all 8. Each unique visual appearance = one character entry.\n\n"
+                "CRITICAL: Only count MAIN story characters (ones with dialogue or plot importance). Background/crowd characters should be IGNORED. Typical TikTok dramas have 4-8 main characters.\n\n"
                 + transcript_section +
                 "\n\nReturn ONLY valid JSON:\n"
                 "{\n"
@@ -98,6 +99,44 @@ def detect_characters(output_dir: Path) -> dict:
     for c in char_structure:
         print(f"     {c.get('role', '?')} ({c.get('gender', '?')}) — {c.get('brief_description', '')}")
 
+    # ── Clone mode: keep original characters ──
+    if keep_original:
+        print("  >> Clone mode: keeping original characters (no new cast)")
+        # Convert original char_structure into the same format as new chars
+        females = [c for c in char_structure if c.get("gender", "").lower() == "female"]
+        males = [c for c in char_structure if c.get("gender", "").lower() == "male"]
+        # Add missing fields for compatibility
+        for c in females + males:
+            if "name" not in c:
+                c["name"] = c.get("brief_description", c.get("role", "character"))
+            if "food_type" not in c:
+                c["food_type"] = c.get("brief_description", "unknown")
+            if "description" not in c:
+                c["description"] = c.get("brief_description", "")
+            if "ref_hint" not in c:
+                c["ref_hint"] = c.get("brief_description", "")
+
+        config = {
+            "visual_style": visual_style,
+            "female_ref_frame": analysis.get("female_ref_frame", sample_frames[0].name),
+            "male_ref_frame": analysis.get("male_ref_frame", sample_frames[0].name),
+            "original_food_types": original_food_types,
+            "characters": {"females": females, "males": males},
+            "style": "auto",
+            "aspect_ratio": "9:16",
+            "target_duration_seconds": 60,
+            "clone_mode": True,
+        }
+
+        config_path = output_dir / "style_config.json"
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+
+        print(f"  >> Original cast kept: {len(females)}F + {len(males)}M characters → saved to style_config.json")
+        for c in females + males:
+            print(f"     {c['name']} ({c.get('role', '?')})")
+        return config
+
     # ── Step 2: Generate a NEW cast with different food types ──
     print("  >> Generating NEW character cast with different food types...")
     # peach is permanently banned — triggers Grok video content moderation
@@ -140,7 +179,18 @@ def detect_characters(output_dir: Path) -> dict:
     match2 = re.search(r'\{.*\}', raw2, re.DOTALL)
     if not match2:
         raise ValueError(f"Step 2 returned non-JSON:\n{raw2}")
-    new_chars = json.loads(match2.group())
+    json_str = match2.group()
+    try:
+        new_chars = json.loads(json_str)
+    except json.JSONDecodeError:
+        # Try to fix common JSON issues (missing commas, trailing commas)
+        import re as _re2
+        fixed = _re2.sub(r',\s*}', '}', json_str)   # trailing comma before }
+        fixed = _re2.sub(r',\s*]', ']', fixed)       # trailing comma before ]
+        fixed = _re2.sub(r'"\s*\n\s*"', '",\n"', fixed)  # missing comma between strings
+        fixed = _re2.sub(r'}\s*\n\s*{', '},\n{', fixed)  # missing comma between objects
+        fixed = _re2.sub(r'}\s*{', '},{', fixed)
+        new_chars = json.loads(fixed)
 
     config = {
         "visual_style": visual_style,
@@ -166,7 +216,7 @@ def detect_characters(output_dir: Path) -> dict:
     return config
 
 
-def run(output_dir: Path) -> dict:
+def run(output_dir: Path, keep_original: bool = False) -> dict:
     transcript_txt = output_dir / "transcript.txt"
     transcript_json = output_dir / "transcript.json"
 
@@ -271,6 +321,6 @@ def run(output_dir: Path) -> dict:
     for beat in beats:
         print(f"     Beat {beat['beat_number']}: {beat['beat_name']} [{beat['emotion']}]")
 
-    detect_characters(output_dir)
+    detect_characters(output_dir, keep_original=keep_original)
 
     return result

@@ -51,11 +51,11 @@ def transcribe(video_path: Path, output_dir: Path) -> dict:
             f.write("")
         return data
 
-    print("  >> Transcribing with Whisper (model: medium)")
+    print("  >> Transcribing with Whisper (model: base)")
     run_cmd(
         [
             "whisper", str(video_path),
-            "--model", "medium",
+            "--model", "base",
             "--language", "en",
             "--output_format", "json",
             "--output_dir", str(output_dir),
@@ -92,7 +92,7 @@ def detect_scenes(video_path: Path, output_dir: Path) -> list[dict]:
     print("  >> Detecting scene boundaries with PySceneDetect...")
     video = open_video(str(video_path))
     sm = SceneManager()
-    sm.add_detector(ContentDetector(threshold=27))
+    sm.add_detector(ContentDetector(threshold=70))
     sm.detect_scenes(video)
     scene_list = sm.get_scene_list()
 

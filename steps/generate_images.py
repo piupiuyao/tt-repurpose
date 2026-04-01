@@ -58,7 +58,9 @@ def _load_config(output_dir: Path, style: str = "fruit-drama"):
     female_ref = load_image_part(frames_dir / FEMALE_REF_FRAME)
     male_ref   = load_image_part(frames_dir / MALE_REF_FRAME)
 
-    return style_config, all_characters, CHARACTER_FRAME_HINT, female_ref, male_ref
+    clone_mode = style_config.get("clone_mode", False)
+
+    return style_config, all_characters, CHARACTER_FRAME_HINT, female_ref, male_ref, clone_mode
 
 
 def run_portraits(output_dir: Path, style: str = "fruit-drama") -> dict:
@@ -66,11 +68,21 @@ def run_portraits(output_dir: Path, style: str = "fruit-drama") -> dict:
     images_dir = output_dir / "images"
     images_dir.mkdir(exist_ok=True)
 
-    style_config, all_characters, CHARACTER_FRAME_HINT, female_ref, male_ref = _load_config(output_dir, style)
+    style_config, all_characters, CHARACTER_FRAME_HINT, female_ref, male_ref, clone_mode = _load_config(output_dir, style)
 
     client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
     model = "models/gemini-2.5-flash-image"
     gen_config = types.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"])
+
+    # In clone mode, load ALL original frames as character references
+    clone_ref_frames = []
+    if clone_mode:
+        frames_dir = output_dir / "frames"
+        all_frames = sorted(frames_dir.glob("frame_*.png"))
+        # Pick up to 4 diverse frames as reference
+        step = max(1, len(all_frames) // 4)
+        for f in all_frames[::step][:4]:
+            clone_ref_frames.append(load_image_part(f))
 
     print("\n[Step 4a] Generating character reference portraits...")
     char_images = {}
@@ -89,15 +101,30 @@ def run_portraits(output_dir: Path, style: str = "fruit-drama") -> dict:
         ref_frame = female_ref if gender == "female" else male_ref
 
         print(f"  >> Generating portrait: {name}...")
-        contents = [
-            "Reference image — use this ONLY to match the 3D render art style, lighting quality, and body proportions. Do NOT copy any character design from it:",
-            ref_frame,
-            f"Create a brand new original character called {name}. "
-            f"{desc}. "
-            f"Match the same hyperrealistic 3D render quality, body proportions, and lighting style as the reference image. "
-            f"Full body shot, neutral pose, pure white background. "
-            f"Hyperrealistic 3D render, warm studio lighting.",
-        ]
+        if clone_mode:
+            # Clone mode: copy the EXACT character from original frames
+            contents = []
+            contents.append("These are frames from the ORIGINAL video. Find and copy the EXACT character described below — same head shape, same colors, same textures, same outfit. IGNORE any watermarks or text overlays in the frames:")
+            for ref in clone_ref_frames:
+                contents.append(ref)
+            contents.append(
+                f"Extract and recreate this EXACT character: {desc}. "
+                f"Copy the character's appearance PRECISELY as shown in the reference frames — same head design, same body, same colors, same outfit, same accessories. "
+                f"Do NOT redesign or reinterpret the character. Make it look IDENTICAL to the original. "
+                f"IMPORTANT: Do NOT include any watermarks, text overlays, or logos from the reference frames. The output must be completely clean. "
+                f"Full body shot, neutral pose, pure white background. "
+                f"Hyperrealistic 3D render, warm studio lighting."
+            )
+        else:
+            contents = [
+                "Reference image — use this ONLY to match the 3D render art style, lighting quality, and body proportions. Do NOT copy any character design from it:",
+                ref_frame,
+                f"Create a brand new original character called {name}. "
+                f"{desc}. "
+                f"Match the same hyperrealistic 3D render quality, body proportions, and lighting style as the reference image. "
+                f"Full body shot, neutral pose, pure white background. "
+                f"Hyperrealistic 3D render, warm studio lighting.",
+            ]
         try:
             response = client.models.generate_content(
                 model=model, contents=contents, config=gen_config
@@ -127,7 +154,15 @@ def run_scenes(output_dir: Path, style: str = "fruit-drama") -> dict:
     images_dir = output_dir / "images"
     images_dir.mkdir(exist_ok=True)
 
-    style_config, all_characters, CHARACTER_FRAME_HINT, female_ref, male_ref = _load_config(output_dir, style)
+    style_config, all_characters, CHARACTER_FRAME_HINT, female_ref, male_ref, clone_mode = _load_config(output_dir, style)
+
+    # In clone mode, load original frames for scene reference
+    clone_scene_refs = {}
+    if clone_mode:
+        frames_dir = output_dir / "frames"
+        all_frames = sorted(frames_dir.glob("frame_*.png"))
+        for i, f in enumerate(all_frames):
+            clone_scene_refs[i + 1] = f
 
     # Load existing portraits
     char_images = {}
@@ -183,31 +218,45 @@ def run_scenes(output_dir: Path, style: str = "fruit-drama") -> dict:
         identity_str = "; ".join(identity_reminders)
 
         contents = []
-        for name in scene_chars:
-            char_desc = ""
-            for c in all_characters:
-                if c["name"] == name:
-                    char_desc = c.get("description", "")
-                    break
-            contents.append(f"{name} — reference portrait. Copy this character EXACTLY as shown (head shape, texture, color, outfit):")
-            contents.append(load_image_part(char_images[name]))
-            if char_desc:
-                contents.append(f"Character details for {name}: {char_desc}")
-        child_chars = [n for n in scene_chars if CHARACTER_FRAME_HINT.get(n, (None,))[0] == "child"]
-        adult_chars = [n for n in scene_chars if n not in child_chars]
-        size_note = "IMPORTANT size consistency: all adult characters are the same full height as in portraits. "
-        if child_chars:
-            size_note += f"Child characters ({', '.join(child_chars)}) are exactly half the height of adults — small, compact, child-sized bodies. "
 
-        contents.append(
-            f"STRICT CHARACTER CONSISTENCY: Copy the EXACT appearance of {char_names_str} from the reference portraits above — "
-            f"same head shape, same head COLOR, same head TEXTURE/PATTERN (spots, bumps, seeds, etc.), same outfit/clothing, same accessories. "
-            f"The reference portraits are the GROUND TRUTH — if the portrait shows a textured head with dots, the scene MUST show the same texture. "
-            f"Do NOT simplify or smooth out any details from the portraits. "
-            f"Character identities: {identity_str}. Do NOT mix up characters. "
-            f"{size_note}"
-            f"SCENE TO GENERATE: {image_prompt} "
-            f"Hyperrealistic 3D render, warm sunny lighting, 9:16 vertical."
+        if clone_mode:
+            # Clone mode: use ONLY character portraits + text prompt (no original frames to avoid watermarks)
+            for name in scene_chars:
+                contents.append(f"{name} — character reference. Copy this character EXACTLY:")
+                contents.append(load_image_part(char_images[name]))
+            contents.append(
+                f"Generate this scene using ONLY the character portraits above as reference. "
+                f"Copy each character EXACTLY — same head shape, texture, colors, outfit. "
+                f"SCENE: {image_prompt} "
+                f"ABSOLUTELY NO TEXT, NO WATERMARKS, NO LOGOS, NO WORDS of any kind in the image. "
+                f"Hyperrealistic 3D render, warm sunny lighting, 9:16 vertical."
+            )
+        else:
+            for name in scene_chars:
+                char_desc = ""
+                for c in all_characters:
+                    if c["name"] == name:
+                        char_desc = c.get("description", "")
+                        break
+                contents.append(f"{name} — reference portrait. Copy this character EXACTLY as shown (head shape, texture, color, outfit):")
+                contents.append(load_image_part(char_images[name]))
+                if char_desc:
+                    contents.append(f"Character details for {name}: {char_desc}")
+            child_chars = [n for n in scene_chars if CHARACTER_FRAME_HINT.get(n, (None,))[0] == "child"]
+            adult_chars = [n for n in scene_chars if n not in child_chars]
+            size_note = "IMPORTANT size consistency: all adult characters are the same full height as in portraits. "
+            if child_chars:
+                size_note += f"Child characters ({', '.join(child_chars)}) are exactly half the height of adults — small, compact, child-sized bodies. "
+
+            contents.append(
+                f"STRICT CHARACTER CONSISTENCY: Copy the EXACT appearance of {char_names_str} from the reference portraits above — "
+                f"same head shape, same head COLOR, same head TEXTURE/PATTERN (spots, bumps, seeds, etc.), same outfit/clothing, same accessories. "
+                f"The reference portraits are the GROUND TRUTH — if the portrait shows a textured head with dots, the scene MUST show the same texture. "
+                f"Do NOT simplify or smooth out any details from the portraits. "
+                f"Character identities: {identity_str}. Do NOT mix up characters. "
+                f"{size_note}"
+                f"SCENE TO GENERATE: {image_prompt} "
+                f"Hyperrealistic 3D render, warm sunny lighting, 9:16 vertical."
         )
 
         try:
