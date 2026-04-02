@@ -3,6 +3,7 @@ import os
 import re
 from pathlib import Path
 from openai import OpenAI
+import httpx
 
 
 def run(output_dir: Path, style: str = "fruit-drama") -> dict:
@@ -51,6 +52,8 @@ def run(output_dir: Path, style: str = "fruit-drama") -> dict:
     client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=os.environ["OPENROUTER_API_KEY"],
+        timeout=httpx.Timeout(120.0, connect=30.0),
+        max_retries=3,
     )
     response = client.chat.completions.create(
         model="anthropic/claude-opus-4-5",

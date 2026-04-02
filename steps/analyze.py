@@ -3,6 +3,7 @@ import os
 import base64
 from pathlib import Path
 from openai import OpenAI
+import httpx
 
 
 def _load_image_b64(path: Path, max_width: int = 768) -> str:
@@ -39,6 +40,8 @@ def detect_characters(output_dir: Path, keep_original: bool = False) -> dict:
     client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=os.environ["OPENROUTER_API_KEY"],
+        timeout=httpx.Timeout(120.0, connect=30.0),
+        max_retries=3,
     )
 
     # ── Step 1: Analyze original video — extract structure & style only ──
@@ -275,6 +278,8 @@ def run(output_dir: Path, keep_original: bool = False) -> dict:
     client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=os.environ["OPENROUTER_API_KEY"],
+        timeout=httpx.Timeout(120.0, connect=30.0),
+        max_retries=3,
     )
     response = client.chat.completions.create(
         model="anthropic/claude-sonnet-4-5",

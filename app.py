@@ -105,10 +105,13 @@ def repurpose_cmd(step: str) -> list:
 def rewrite_prompt_with_feedback(original_prompt: str, feedback: str) -> str:
     """Call Claude via OpenRouter to rewrite a prompt incorporating user feedback."""
     import os
+    import httpx
     from openai import OpenAI
     client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=os.environ["OPENROUTER_API_KEY"],
+        timeout=httpx.Timeout(120.0, connect=30.0),
+        max_retries=3,
     )
     system = (
         "You are a creative director for AI-generated video content with anthropomorphic food characters. "
