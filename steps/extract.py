@@ -51,31 +51,51 @@ def transcribe(video_path: Path, output_dir: Path) -> dict:
             f.write("")
         return data
 
-    print("  >> Transcribing with Whisper (model: base)")
+    # Extract audio to mp3 for API upload
+    audio_path = output_dir / "audio.mp3"
+    print("  >> Extracting audio track...")
     run_cmd(
-        [
-            "whisper", str(video_path),
-            "--model", "base",
-            "--language", "en",
-            "--output_format", "json",
-            "--output_dir", str(output_dir),
-        ],
-        "Running Whisper transcription"
+        ["ffmpeg", "-i", str(video_path), "-vn", "-acodec", "libmp3lame",
+         "-q:a", "4", str(audio_path), "-y"],
+        "Extracting audio to mp3"
     )
-    # Whisper outputs <stem>.json
-    json_path = output_dir / (video_path.stem + ".json")
-    if not json_path.exists():
-        raise RuntimeError(f"Whisper output not found at {json_path}")
 
-    # Rename to transcript.json
-    json_path.rename(transcript_json)
+    print("  >> Transcribing with Gemini...")
+    from google import genai
 
-    with open(transcript_json) as f:
-        data = json.load(f)
+    client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
 
-    # Also write plain text transcript
+    # Upload audio file
+    audio_file = client.files.upload(file=audio_path)
+
+    response = client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=[
+            audio_file,
+            (
+                "Transcribe this audio exactly as spoken. "
+                "Return ONLY a JSON object with this format:\n"
+                '{"text": "full transcript here", "segments": [{"start": 0.0, "end": 2.5, "text": "segment text"}]}\n'
+                "Include timestamps for each natural sentence or phrase. Return ONLY valid JSON, no markdown."
+            ),
+        ],
+    )
+
+    import re
+    raw = response.text.strip()
+    # Strip markdown code fences if present
+    raw = re.sub(r'^```(?:json)?\s*', '', raw)
+    raw = re.sub(r'\s*```$', '', raw)
+    data = json.loads(raw)
+
+    with open(transcript_json, "w") as f:
+        json.dump(data, f, indent=2)
+
     with open(transcript_txt, "w") as f:
         f.write(data.get("text", "").strip())
+
+    # Clean up temp audio
+    audio_path.unlink(missing_ok=True)
 
     print(f"  >> Transcript saved: {transcript_json}, {transcript_txt}")
     return data

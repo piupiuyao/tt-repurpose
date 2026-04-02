@@ -1,6 +1,6 @@
 streamlit
 yt-dlp
-openai-whisper
+scenedetect[opencv]
 ffmpeg-python
 openai
 google-genai
