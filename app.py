@@ -272,12 +272,35 @@ if st.session_state.stage == "input":
         st.session_state.output_dir = out_name
 
         st.session_state.running = True
+        st.warning("⏳ This step takes about **3-5 minutes** — please don't close the page!")
+        progress_bar = st.progress(0, text="Starting...")
         with st.status("Extracting video, transcribing audio, pulling frames…", expanded=True) as status:
-            st.write("⬇️ Downloading video...")
-            st.write("🎙️ Transcribing with Whisper — this takes 1-3 min, please wait...")
-            st.write("🖼️ Extracting frames...")
             placeholder = st.empty()
-            rc = run_cmd(repurpose_cmd("extract"), placeholder)
+            # Run with progress tracking based on output keywords
+            env = {**__import__("os").environ, "PYTHONUNBUFFERED": "1"}
+            process = subprocess.Popen(
+                repurpose_cmd("extract"), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, cwd=str(PROJECT_DIR), env=env
+            )
+            lines = []
+            start = time.time()
+            for line in process.stdout:
+                lines.append(line.rstrip())
+                elapsed = int(time.time() - start)
+                # Update progress based on what step we're on
+                if "Downloading" in line or "yt-dlp" in line:
+                    progress_bar.progress(15, text="⬇️ Downloading video...")
+                elif "Transcribing" in line or "audio" in line.lower():
+                    progress_bar.progress(35, text="🎙️ Transcribing audio...")
+                elif "Detecting scene" in line or "SceneDetect" in line:
+                    progress_bar.progress(70, text="🖼️ Detecting scenes...")
+                elif "Done" in line:
+                    progress_bar.progress(95, text="Almost done...")
+                lines_display = lines[-30:]
+                placeholder.code(f"⏱ {elapsed}s elapsed\n\n" + "\n".join(lines_display))
+            process.wait()
+            rc = process.returncode
+            progress_bar.progress(100, text="✅ Complete!")
             st.session_state.running = False
             if rc == 0:
                 status.update(label="✅ Extraction complete!", state="complete")
