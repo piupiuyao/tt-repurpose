@@ -192,12 +192,10 @@ def detect_characters(output_dir: Path, keep_original: bool = False) -> dict:
         "  }\n"
         "}"
     )
-    response2 = client.chat.completions.create(
-        model="anthropic/claude-sonnet-4-5",
-        max_tokens=2048,
+    raw2 = _call_openrouter(
         messages=[{"role": "user", "content": gen_prompt}],
-    )
-    raw2 = response2.choices[0].message.content.strip()
+        max_tokens=2048,
+    ).strip()
     match2 = re.search(r'\{.*\}', raw2, re.DOTALL)
     if not match2:
         raise ValueError(f"Step 2 returned non-JSON:\n{raw2}")
