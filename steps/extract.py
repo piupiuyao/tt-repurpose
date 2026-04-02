@@ -112,7 +112,7 @@ def detect_scenes(video_path: Path, output_dir: Path) -> list[dict]:
     print("  >> Detecting scene boundaries with PySceneDetect...")
     video = open_video(str(video_path))
     sm = SceneManager()
-    sm.add_detector(ContentDetector(threshold=70))
+    sm.add_detector(ContentDetector(threshold=27))
     sm.detect_scenes(video)
     scene_list = sm.get_scene_list()
 
