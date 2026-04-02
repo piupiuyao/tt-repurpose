@@ -1,9 +1,37 @@
 import json
 import os
 import base64
+import time
 from pathlib import Path
-from openai import OpenAI
-import httpx
+import requests
+
+
+def _call_openrouter(messages, max_tokens=1024, model="anthropic/claude-sonnet-4-5"):
+    """Call OpenRouter using requests directly (avoids OpenAI SDK connection issues)."""
+    for attempt in range(3):
+        try:
+            resp = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "max_tokens": max_tokens,
+                    "messages": messages,
+                },
+                timeout=120,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            print(f"  >> OpenRouter attempt {attempt+1} failed: {e}")
+            if attempt < 2:
+                time.sleep(2)
+            else:
+                raise
 
 
 def _load_image_b64(path: Path, max_width: int = 768) -> str:
@@ -36,13 +64,6 @@ def detect_characters(output_dir: Path, keep_original: bool = False) -> dict:
     transcript_path = output_dir / "transcript.txt"
     if transcript_path.exists():
         transcript = transcript_path.read_text().strip()
-
-    client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=os.environ["OPENROUTER_API_KEY"],
-        timeout=httpx.Timeout(120.0, connect=30.0),
-        max_retries=3,
-    )
 
     # ── Step 1: Analyze original video — extract structure & style only ──
     print("  >> Analyzing original video style and family structure...")
@@ -81,12 +102,10 @@ def detect_characters(output_dir: Path, keep_original: bool = False) -> dict:
         content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{_load_image_b64(frame_path)}"}})
         content.append({"type": "text", "text": f"(frame: {frame_path.name})"})
 
-    response = client.chat.completions.create(
-        model="anthropic/claude-sonnet-4-5",
-        max_tokens=1024,
+    raw = _call_openrouter(
         messages=[{"role": "user", "content": content}],
-    )
-    raw = response.choices[0].message.content.strip()
+        max_tokens=1024,
+    ).strip()
     match = re.search(r'\{.*\}', raw, re.DOTALL)
     if not match:
         raise ValueError(f"Step 1 returned non-JSON:\n{raw}")
@@ -275,28 +294,16 @@ def run(output_dir: Path, keep_original: bool = False) -> dict:
     user_content.append({"type": "text", "text": transcript_text})
 
     print(f"  >> Calling Claude via OpenRouter for {num_beats}-beat analysis...")
-    client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=os.environ["OPENROUTER_API_KEY"],
-        timeout=httpx.Timeout(120.0, connect=30.0),
-        max_retries=3,
-    )
-    response = client.chat.completions.create(
-        model="anthropic/claude-sonnet-4-5",
-        max_tokens=max(2048, num_beats * 400),
+    raw = _call_openrouter(
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ],
+        max_tokens=max(2048, num_beats * 400),
     )
     import re as _re
-    if not response.choices:
-        raise ValueError(f"API returned no choices. Full response: {response}")
-    msg = response.choices[0].message
-    raw = msg.content
     if not raw:
-        # Content may be None if model refused or hit limits — log full response
-        raise ValueError(f"Model returned empty content. Finish reason: {response.choices[0].finish_reason}. Refusal: {getattr(msg, 'refusal', None)}")
+        raise ValueError("Model returned empty content.")
     raw = raw.strip()
 
     try:

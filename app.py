@@ -102,17 +102,31 @@ def repurpose_cmd(step: str) -> list:
         cmd.append("--clone")
     return cmd
 
+def _call_openrouter(messages, max_tokens=1024, model="anthropic/claude-sonnet-4-5"):
+    """Call OpenRouter using requests directly."""
+    import os
+    for attempt in range(3):
+        try:
+            resp = __import__("requests").post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
+                    "Content-Type": "application/json",
+                },
+                json={"model": model, "max_tokens": max_tokens, "messages": messages},
+                timeout=120,
+            )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
+        except Exception as e:
+            print(f"  >> OpenRouter attempt {attempt+1} failed: {e}")
+            if attempt < 2:
+                time.sleep(2)
+            else:
+                raise
+
 def rewrite_prompt_with_feedback(original_prompt: str, feedback: str) -> str:
     """Call Claude via OpenRouter to rewrite a prompt incorporating user feedback."""
-    import os
-    import httpx
-    from openai import OpenAI
-    client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=os.environ["OPENROUTER_API_KEY"],
-        timeout=httpx.Timeout(120.0, connect=30.0),
-        max_retries=3,
-    )
     system = (
         "You are a creative director for AI-generated video content with anthropomorphic food characters. "
         "Rewrite the given prompt incorporating the user's feedback. "
@@ -123,15 +137,12 @@ def rewrite_prompt_with_feedback(original_prompt: str, feedback: str) -> str:
         f"USER FEEDBACK:\n{feedback}\n\n"
         "Rewrite the prompt incorporating this feedback."
     )
-    response = client.chat.completions.create(
-        model="anthropic/claude-sonnet-4-5",
-        max_tokens=1024,
+    return _call_openrouter(
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user_msg},
         ],
-    )
-    return response.choices[0].message.content.strip()
+    ).strip()
 
 def update_character_description(char_name: str, feedback: str):
     """Use Claude to rewrite a character's description based on user feedback, then update style_config.json."""
@@ -152,13 +163,7 @@ def update_character_description(char_name: str, feedback: str):
     if not target_char:
         return
 
-    client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=os.environ["OPENROUTER_API_KEY"],
-    )
-    response = client.chat.completions.create(
-        model="anthropic/claude-sonnet-4-5",
-        max_tokens=512,
+    new_desc = _call_openrouter(
         messages=[
             {"role": "system", "content": (
                 "You rewrite character descriptions for AI image generation. "
@@ -173,8 +178,8 @@ def update_character_description(char_name: str, feedback: str):
                 "Rewrite the description incorporating this feedback."
             )},
         ],
-    )
-    new_desc = response.choices[0].message.content.strip()
+        max_tokens=512,
+    ).strip()
     target_char["description"] = new_desc
 
     with open(config_path, "w") as f:

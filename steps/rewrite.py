@@ -1,9 +1,37 @@
 import json
 import os
 import re
+import time
 from pathlib import Path
-from openai import OpenAI
-import httpx
+import requests
+
+
+def _call_openrouter(messages, max_tokens=1024, model="anthropic/claude-sonnet-4-5"):
+    """Call OpenRouter using requests directly."""
+    for attempt in range(3):
+        try:
+            resp = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "max_tokens": max_tokens,
+                    "messages": messages,
+                },
+                timeout=120,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            print(f"  >> OpenRouter attempt {attempt+1} failed: {e}")
+            if attempt < 2:
+                time.sleep(2)
+            else:
+                raise
 
 
 def run(output_dir: Path, style: str = "fruit-drama") -> dict:
@@ -49,21 +77,14 @@ def run(output_dir: Path, style: str = "fruit-drama") -> dict:
     )
 
     print("  >> Calling Claude via OpenRouter for script rewrite...")
-    client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=os.environ["OPENROUTER_API_KEY"],
-        timeout=httpx.Timeout(120.0, connect=30.0),
-        max_retries=3,
-    )
-    response = client.chat.completions.create(
-        model="anthropic/claude-opus-4-5",
-        max_tokens=max(16000, num_beats * 1500),
+    raw = _call_openrouter(
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
         ],
-    )
-    raw = response.choices[0].message.content.strip()
+        max_tokens=max(16000, num_beats * 1500),
+        model="anthropic/claude-opus-4-5",
+    ).strip()
 
     try:
         result = json.loads(raw)
