@@ -14,6 +14,38 @@ sys.path.insert(0, str(PROJECT_DIR))
 
 st.set_page_config(page_title="🎬 TT Repurpose", layout="wide")
 
+# ── IP rate limiting (1 video per IP) ───────────────────────────────────────
+USAGE_FILE = PROJECT_DIR / "ip_usage.json"
+
+def _get_client_ip() -> str:
+    """Get client IP from request headers (behind Railway proxy)."""
+    try:
+        headers = st.context.headers
+        return headers.get("X-Forwarded-For", "unknown").split(",")[0].strip()
+    except Exception:
+        return "unknown"
+
+def _load_usage() -> dict:
+    if USAGE_FILE.exists():
+        with open(USAGE_FILE) as f:
+            return json.load(f)
+    return {}
+
+def _save_usage(usage: dict):
+    with open(USAGE_FILE, "w") as f:
+        json.dump(usage, f)
+
+def _mark_ip_used(ip: str):
+    usage = _load_usage()
+    usage[ip] = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "count": usage.get(ip, {}).get("count", 0) + 1}
+    _save_usage(usage)
+
+def _ip_has_quota(ip: str) -> bool:
+    if ip == "unknown":
+        return True
+    usage = _load_usage()
+    return usage.get(ip, {}).get("count", 0) < 1
+
 # ── Styles available ────────────────────────────────────────────────────────
 STYLES = {
     "candy-drama": "🍬 Candy Drama (pregnancy / hospital)",
@@ -229,6 +261,11 @@ if st.session_state.stage == "input":
     clone_mode = st.checkbox("🔁 Clone mode (keep original characters & plot, just regenerate)", value=st.session_state.get("clone_mode", False))
     st.session_state.clone_mode = clone_mode
     st.caption("Characters will be auto-detected from the video frames — no style config needed.")
+
+    client_ip = _get_client_ip()
+    if not _ip_has_quota(client_ip):
+        st.warning("⚠️ You've already used your free trial. Each user gets 1 free video.")
+        st.stop()
 
     if st.button("🚀 Extract Video", type="primary", disabled=not url.strip() or st.session_state.get("running", False)):
         st.session_state.url = url.strip()
@@ -615,13 +652,13 @@ elif st.session_state.stage == "done":
     st.title("🎉 Done!")
     final_path = out_dir() / "final.mp4"
 
+    # Mark IP as used when video is complete
+    _mark_ip_used(_get_client_ip())
+
     if final_path.exists():
         st.video(str(final_path))
         st.divider()
         with open(final_path, "rb") as f:
             st.download_button("⬇️ Download final.mp4", f, file_name="final.mp4", mime="video/mp4", type="primary")
 
-    if st.button("🔁 Make Another Video"):
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
-        st.rerun()
+    st.info("🎉 Thanks for trying! Each user gets 1 free video.")

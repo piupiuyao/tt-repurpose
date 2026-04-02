@@ -6,3 +6,4 @@ output*/
 *.png
 *.jpg
 .DS_Store
+ip_usage.json
