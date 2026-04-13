@@ -7,3 +7,7 @@ output*/
 *.jpg
 .DS_Store
 ip_usage.json
+
+# Landing page assets (demo video + character portraits) must ship with the app
+!assets/
+!assets/**

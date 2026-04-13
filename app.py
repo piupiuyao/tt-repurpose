@@ -12,7 +12,12 @@ load_dotenv()
 PROJECT_DIR = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_DIR))
 
-st.set_page_config(page_title="🎬 TT Repurpose", layout="wide")
+st.set_page_config(
+    page_title="TTRepurpose: Remix viral fruit drama TikToks into your own videos",
+    page_icon="🎬",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 
 # ── IP rate limiting (1 video per IP) ───────────────────────────────────────
 USAGE_FILE = PROJECT_DIR / "ip_usage.json"
@@ -55,7 +60,7 @@ STYLES = {
 # ── Session state defaults ───────────────────────────────────────────────────
 def _init():
     defaults = {
-        "stage": "input",          # input | frames | script | portraits | scenes | animate | done
+        "stage": "landing",        # landing | input | frames | script | portraits | scenes | animate | done
         "output_dir": None,
         "style": "candy-drama",
         "url": "",
@@ -73,6 +78,23 @@ _init()
 def out_dir() -> Path:
     return PROJECT_DIR / st.session_state.output_dir
 
+def _kill_running_process():
+    """Kill any pipeline process stored in session state."""
+    proc = st.session_state.get("_running_proc")
+    if proc is not None:
+        try:
+            proc.terminate()
+            proc.wait(timeout=3)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        st.session_state["_running_proc"] = None
+
+# Kill any leftover process from a previous run on every page load
+_kill_running_process()
+
 def run_cmd(cmd: list, placeholder) -> int:
     """Run a subprocess, stream stdout line-by-line into placeholder."""
     env = {**__import__("os").environ, "PYTHONUNBUFFERED": "1"}
@@ -80,6 +102,7 @@ def run_cmd(cmd: list, placeholder) -> int:
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, cwd=str(PROJECT_DIR), env=env
     )
+    st.session_state["_running_proc"] = process
     lines = []
     start = time.time()
     for line in process.stdout:
@@ -88,6 +111,7 @@ def run_cmd(cmd: list, placeholder) -> int:
         lines_display = lines[-30:]
         placeholder.code(f"⏱ {elapsed}s elapsed\n\n" + "\n".join(lines_display))
     process.wait()
+    st.session_state["_running_proc"] = None
     return process.returncode
 
 def repurpose_cmd(step: str) -> list:
@@ -129,13 +153,15 @@ def rewrite_prompt_with_feedback(original_prompt: str, feedback: str) -> str:
     """Call Claude via OpenRouter to rewrite a prompt incorporating user feedback."""
     system = (
         "You are a creative director for AI-generated video content with anthropomorphic food characters. "
-        "Rewrite the given prompt incorporating the user's feedback. "
-        "Keep the same format, length, and structure. Return ONLY the rewritten prompt, no explanation."
+        "Rewrite the given image/video prompt to fully incorporate the user's feedback. "
+        "Make substantial changes where needed — do NOT preserve phrasing just because it was in the original. "
+        "The rewritten prompt must clearly reflect the feedback. "
+        "Return ONLY the rewritten prompt, no explanation, no preamble."
     )
     user_msg = (
         f"ORIGINAL PROMPT:\n{original_prompt}\n\n"
         f"USER FEEDBACK:\n{feedback}\n\n"
-        "Rewrite the prompt incorporating this feedback."
+        "Rewrite the prompt so it clearly incorporates this feedback. Be specific and concrete."
     )
     return _call_openrouter(
         messages=[
@@ -202,6 +228,237 @@ def update_script_prompt(beat_num: int, prompt_key: str, new_prompt: str):
         json.dump(script, f, indent=2, ensure_ascii=False)
     st.session_state.script = script
 
+# ══════════════════════════════════════════════════════════════════════════════
+# STAGE 0 — Landing Page (full-page takeover)
+# ══════════════════════════════════════════════════════════════════════════════
+if st.session_state.stage == "landing":
+    ASSETS = PROJECT_DIR / "assets"
+
+    st.markdown("""
+<style>
+/* Hide all streamlit chrome on the landing page */
+[data-testid="stSidebar"], [data-testid="stSidebarNav"], [data-testid="collapsedControl"] { display: none !important; }
+#MainMenu, header, footer { visibility: hidden !important; }
+[data-testid="stHeader"] { display: none !important; }
+
+/* Tighter main block + roomy hero */
+.main .block-container {
+    max-width: 1040px;
+    padding-top: 3rem;
+    padding-bottom: 4rem;
+}
+
+/* Hero typography */
+.tt-eyebrow {
+    display: inline-block;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #ff6b6b;
+    background: rgba(255, 107, 107, 0.1);
+    padding: 0.4rem 0.9rem;
+    border-radius: 999px;
+    margin-bottom: 1.25rem;
+}
+.tt-hero-title {
+    font-size: 3.2rem;
+    font-weight: 800;
+    line-height: 1.08;
+    letter-spacing: -0.02em;
+    margin: 0 0 1.1rem 0;
+    background: linear-gradient(135deg, #1a1a1a 0%, #4a4a4a 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+.tt-hero-sub {
+    font-size: 1.18rem;
+    line-height: 1.55;
+    color: #555;
+    max-width: 640px;
+    margin: 0 0 2rem 0;
+}
+.tt-hero-sub b { color: #222; }
+
+/* Big rounded CTA button */
+div.stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, #ff6b6b 0%, #ff8e53 100%);
+    color: white;
+    font-size: 1.15rem;
+    font-weight: 700;
+    padding: 0.95rem 2.4rem;
+    border-radius: 999px;
+    border: none;
+    box-shadow: 0 12px 28px rgba(255, 107, 107, 0.32);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+div.stButton > button[kind="primary"]:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 16px 34px rgba(255, 107, 107, 0.4);
+    color: white;
+}
+
+/* Section headings */
+.tt-section-title {
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #888;
+    text-align: center;
+    margin: 3.5rem 0 1.25rem 0;
+}
+.tt-section-sub {
+    font-size: 1.8rem;
+    font-weight: 800;
+    text-align: center;
+    line-height: 1.2;
+    margin: 0 0 2.25rem 0;
+    color: #1a1a1a;
+}
+
+/* Step cards */
+.tt-step {
+    background: #fafafa;
+    border: 1px solid #eee;
+    border-radius: 18px;
+    padding: 1.6rem 1.4rem;
+    height: 100%;
+}
+.tt-step-num {
+    font-size: 0.75rem;
+    font-weight: 800;
+    color: #ff6b6b;
+    letter-spacing: 0.1em;
+    margin-bottom: 0.5rem;
+}
+.tt-step-title {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #1a1a1a;
+    margin-bottom: 0.4rem;
+}
+.tt-step-body { font-size: 0.95rem; color: #666; line-height: 1.5; }
+
+/* Character row */
+.tt-char-caption {
+    text-align: center;
+    font-size: 0.85rem;
+    color: #777;
+    margin-top: 0.35rem;
+}
+
+/* Price strike callout */
+.tt-price {
+    display: inline-block;
+    font-size: 0.95rem;
+    color: #888;
+    margin-top: 1rem;
+}
+.tt-price s { color: #bbb; margin-right: 0.5rem; }
+.tt-price b { color: #ff6b6b; font-weight: 800; }
+
+/* Footer */
+.tt-footer {
+    text-align: center;
+    margin-top: 4rem;
+    padding-top: 2rem;
+    border-top: 1px solid #eee;
+    font-size: 0.85rem;
+    color: #999;
+}
+</style>
+    """, unsafe_allow_html=True)
+
+    # ── Hero ────────────────────────────────────────────────────────────────
+    hero_left, hero_right = st.columns([5, 6], gap="large")
+    with hero_left:
+        st.markdown('<span class="tt-eyebrow">🎬 TTRepurpose</span>', unsafe_allow_html=True)
+        st.markdown(
+            '<h1 class="tt-hero-title">Your own viral fruit drama videos in 10 minutes, for free.</h1>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<p class="tt-hero-sub">Stop paying <b>$200+</b> per AI fruit drama video. '
+            'Paste a viral TikTok, pick a style, and we\'ll remix it with new characters '
+            'and a brand-new plot. Same addictive hook, your story.</p>',
+            unsafe_allow_html=True,
+        )
+        if st.button("🚀  Try it free →", type="primary", key="landing_cta_top"):
+            st.session_state.stage = "input"
+            st.rerun()
+        st.markdown(
+            '<div class="tt-price"><s>$200+ / video (agency)</s> <b>Free · 1 video per visitor</b></div>',
+            unsafe_allow_html=True,
+        )
+
+    with hero_right:
+        demo_path = ASSETS / "demo.mp4"
+        if demo_path.exists():
+            st.video(str(demo_path))
+            st.caption("↑ Real example: this AI fruit drama hit 69K views on TikTok.")
+        else:
+            st.info("Demo video will appear here once `assets/demo.mp4` is in place.")
+
+    # ── How it works ────────────────────────────────────────────────────────
+    st.markdown('<div class="tt-section-title">How it works</div>', unsafe_allow_html=True)
+    st.markdown('<div class="tt-section-sub">Three steps. No editing skills required.</div>', unsafe_allow_html=True)
+
+    steps = [
+        ("STEP 01", "Paste a TikTok link",
+         "Drop in the URL of any viral fruit drama you want to remix. We pull the video, transcribe it, and extract the key scenes automatically."),
+        ("STEP 02", "Pick your style & scenes",
+         "Choose which scenes to keep, then let AI rewrite the script with <b>your</b> characters and a brand-new plot. Not a copy of the original story."),
+        ("STEP 03", "Download your video",
+         "We generate character portraits, scene images, animate them into video, and burn in subtitles. You get a finished MP4, ready to post."),
+    ]
+    cols = st.columns(3, gap="medium")
+    for col, (num, title, body) in zip(cols, steps):
+        with col:
+            st.markdown(
+                f'<div class="tt-step">'
+                f'<div class="tt-step-num">{num}</div>'
+                f'<div class="tt-step-title">{title}</div>'
+                f'<div class="tt-step-body">{body}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+    # ── Character showcase ─────────────────────────────────────────────────
+    st.markdown('<div class="tt-section-title">Characters you\'ll get</div>', unsafe_allow_html=True)
+    st.markdown('<div class="tt-section-sub">AI-generated portraits, consistent across every scene.</div>', unsafe_allow_html=True)
+
+    chars = [
+        ("char_banana.png", "Banana"),
+        ("char_cherry.png", "Cherry"),
+        ("char_mango.png", "Mango"),
+        ("char_blueberry.png", "Blueberry"),
+    ]
+    char_cols = st.columns(4, gap="medium")
+    for col, (filename, name) in zip(char_cols, chars):
+        with col:
+            img_path = ASSETS / filename
+            if img_path.exists():
+                st.image(str(img_path), use_container_width=True)
+                st.markdown(f'<div class="tt-char-caption">{name}</div>', unsafe_allow_html=True)
+
+    # ── Final CTA ──────────────────────────────────────────────────────────
+    st.markdown('<div class="tt-section-title">Ready?</div>', unsafe_allow_html=True)
+    st.markdown('<div class="tt-section-sub">Your first video is on us.</div>', unsafe_allow_html=True)
+    cta_l, cta_c, cta_r = st.columns([1, 2, 1])
+    with cta_c:
+        if st.button("🚀  Try it free →", type="primary", key="landing_cta_bottom", use_container_width=True):
+            st.session_state.stage = "input"
+            st.rerun()
+
+    st.markdown(
+        '<div class="tt-footer">Built by a creator with 69K+ views on AI fruit drama · '
+        'Powered by Claude, Gemini & Grok</div>',
+        unsafe_allow_html=True,
+    )
+    st.stop()
+
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("🎬 TT Repurpose")
@@ -262,13 +519,15 @@ with st.sidebar:
 # STAGE 1 — Input
 # ══════════════════════════════════════════════════════════════════════════════
 if st.session_state.stage == "input":
-    st.title("Step 1 — Paste TikTok URL")
+    st.title("Step 1. Paste a TikTok URL")
+    st.markdown(
+        "**What happens here:** we download the video you want to remix, transcribe the audio with Whisper, "
+        "and split it into scenes. This takes 3–5 minutes. You don't have to do anything during this step."
+    )
 
     url = st.text_input("TikTok URL", value=st.session_state.url, placeholder="https://www.tiktok.com/@...")
-    out_name = st.text_input("Output folder name", value=f"output_{int(time.time())}")
-    clone_mode = st.checkbox("🔁 Clone mode (keep original characters & plot, just regenerate)", value=st.session_state.get("clone_mode", False))
-    st.session_state.clone_mode = clone_mode
-    st.caption("Characters will be auto-detected from the video frames — no style config needed.")
+    out_name = st.text_input("Output folder name", value=f"output_{int(time.time())}", help="A label for this run so you can resume it later. You can leave the default.")
+    st.caption("Characters will be auto-detected from the video frames. No style config needed.")
 
     client_ip = _get_client_ip()
     if not _ip_has_quota(client_ip):
@@ -290,6 +549,7 @@ if st.session_state.stage == "input":
                 repurpose_cmd("extract"), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, cwd=str(PROJECT_DIR), env=env
             )
+            st.session_state["_running_proc"] = process
             lines = []
             start = time.time()
             for line in process.stdout:
@@ -307,6 +567,7 @@ if st.session_state.stage == "input":
                 lines_display = lines[-30:]
                 placeholder.code(f"⏱ {elapsed}s elapsed\n\n" + "\n".join(lines_display))
             process.wait()
+            st.session_state["_running_proc"] = None
             rc = process.returncode
             progress_bar.progress(100, text="✅ Complete!")
             st.session_state.running = False
@@ -331,8 +592,12 @@ if st.session_state.stage == "input":
 # STAGE 2 — Frame Selection
 # ══════════════════════════════════════════════════════════════════════════════
 elif st.session_state.stage == "frames":
-    st.title("Step 2 — Select Scenes")
-    st.caption("Each frame represents an auto-detected scene from the original video. Select the scenes you want to keep. Each selected scene = one beat in your new video.")
+    st.title("Step 2. Pick the scenes to keep")
+    st.markdown(
+        "**What to do:** each thumbnail below is one scene auto-detected from the original video. "
+        "Uncheck any you don't want (ads, intros, boring shots). Every scene you keep becomes one beat in your new video, "
+        "so fewer scenes = shorter video. **Tip:** 6–8 scenes makes a good 40–60s TikTok."
+    )
 
     frames_dir = out_dir() / "frames"
     all_frames = sorted(frames_dir.glob("frame_*.png"))
@@ -405,7 +670,13 @@ elif st.session_state.stage == "frames":
 # STAGE 3 — Script Review
 # ══════════════════════════════════════════════════════════════════════════════
 elif st.session_state.stage == "script":
-    st.title("Step 3 — Review Script")
+    st.title("Step 3. Review the new script")
+    st.markdown(
+        "**What happened:** Claude analyzed the original video and wrote you a brand-new script with new fruit characters "
+        "and a new plot, keeping the same beat structure and emotional arc. Each beat below shows the dialogue, the image prompt "
+        "(for the still frame), and the video prompt (for the animation). Skim through. If it looks good, continue to portraits — "
+        "you'll be able to edit individual prompts later if needed."
+    )
 
     script = st.session_state.script or {}
     beats = script.get("beats", [])
@@ -433,8 +704,13 @@ elif st.session_state.stage == "script":
 # STAGE 4 — Character Portraits
 # ══════════════════════════════════════════════════════════════════════════════
 elif st.session_state.stage == "portraits":
-    st.title("Step 4 — Character Portraits")
-    st.caption("Review character portraits. Regenerate any you don't like before generating scene images.")
+    st.title("Step 4. Review character portraits")
+    st.markdown(
+        "**What happened:** Gemini generated a full-body portrait for every character. These portraits are the "
+        "visual anchor for the whole video. Every scene image in the next step will use them as reference to keep "
+        "characters consistent. **If any portrait looks wrong, fix it here.** Write what you want changed in the "
+        "feedback box and click Redo. Only continue once you're happy with every character."
+    )
 
     images_dir = out_dir() / "images"
     portraits = sorted(images_dir.glob("char_*.png")) if images_dir.exists() else []
@@ -477,7 +753,7 @@ elif st.session_state.stage == "portraits":
                     key=f"feedback_portrait_{p.stem}",
                     height=100,
                     label_visibility="collapsed",
-                    placeholder="修改意见（如：换成蓝色、表情凶一点、花小一些）留空则直接重新生成",
+                    placeholder="What to change? (e.g. 'make the outfit blue', 'meaner expression', 'smaller fruit on head'). Leave empty to just regenerate.",
                 )
             with col_btn:
                 st.write("")
@@ -520,7 +796,13 @@ elif st.session_state.stage == "portraits":
 # STAGE 5 — Scene Images
 # ══════════════════════════════════════════════════════════════════════════════
 elif st.session_state.stage == "scenes":
-    st.title("Step 5 — Scene Images")
+    st.title("Step 5. Review scene images")
+    st.markdown(
+        "**What happened:** using your approved character portraits as reference, Gemini generated one still image "
+        "for every beat of the script. These are the key frames that will get animated into video in the next step. "
+        "**Review each one.** If composition, expression, or lighting is off, describe the fix in the feedback box and click Redo — "
+        "only this one scene is regenerated (your others stay intact)."
+    )
 
     images_dir = out_dir() / "images"
     scenes = sorted(images_dir.glob("scene_*.png")) if images_dir.exists() else []
@@ -553,7 +835,7 @@ elif st.session_state.stage == "scenes":
                     key=f"feedback_img_{beat_num}",
                     height=100,
                     label_visibility="collapsed",
-                    placeholder="修改意见，留空则直接重新生成",
+                    placeholder="What to change? (e.g. 'more dramatic lighting', 'move Cherry to the left'). Leave empty to just regenerate.",
                 )
             with col_btn:
                 st.write("")
@@ -596,7 +878,13 @@ elif st.session_state.stage == "scenes":
 # STAGE 5 — Animation
 # ══════════════════════════════════════════════════════════════════════════════
 elif st.session_state.stage == "animate":
-    st.title("Step 5 — Animate Scenes")
+    st.title("Step 6. Animate the scenes")
+    st.markdown(
+        "**What happened:** each still image was sent to Grok video (xAI) to be animated into a short clip, "
+        "then stitched together. This step takes ~5 minutes total (each clip is a few seconds). "
+        "**Check each clip.** If motion looks wrong, describe what you want in the feedback box and Redo just that clip. "
+        "When all clips look good, click **Assemble Final Video** to stitch them together with subtitles."
+    )
 
     videos_dir = out_dir() / "videos"
 
@@ -632,7 +920,7 @@ elif st.session_state.stage == "animate":
                     key=f"feedback_vid_{beat_num}",
                     height=100,
                     label_visibility="collapsed",
-                    placeholder="修改意见，留空则直接重新生成",
+                    placeholder="What to change? (e.g. 'slower camera', 'Cherry should walk forward'). Leave empty to just regenerate.",
                 )
             with col_btn:
                 st.write("")
@@ -680,7 +968,11 @@ elif st.session_state.stage == "animate":
 # STAGE 6 — Done
 # ══════════════════════════════════════════════════════════════════════════════
 elif st.session_state.stage == "done":
-    st.title("🎉 Done!")
+    st.title("Step 7. Your video is ready 🎉")
+    st.markdown(
+        "**That's it.** The final video has your scenes stitched together with burned-in subtitles, "
+        "ready to post. Download the MP4 below and upload it to TikTok directly."
+    )
     final_path = out_dir() / "final.mp4"
 
     # Mark IP as used when video is complete
