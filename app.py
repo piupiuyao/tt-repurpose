@@ -537,6 +537,7 @@ if st.session_state.stage == "input":
     if st.button("🚀 Extract Video", type="primary", disabled=not url.strip() or st.session_state.get("running", False)):
         st.session_state.url = url.strip()
         st.session_state.output_dir = out_name
+        _mark_ip_used(client_ip)  # Mark immediately — before any processing starts
 
         st.session_state.running = True
         st.warning("⏳ This step takes about **3-5 minutes** — please don't close the page!")
@@ -974,9 +975,6 @@ elif st.session_state.stage == "done":
         "ready to post. Download the MP4 below and upload it to TikTok directly."
     )
     final_path = out_dir() / "final.mp4"
-
-    # Mark IP as used when video is complete
-    _mark_ip_used(_get_client_ip())
 
     if final_path.exists():
         st.video(str(final_path))
