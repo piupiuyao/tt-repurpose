@@ -588,6 +588,15 @@ if st.session_state.stage == "input":
                 st.rerun()
             else:
                 status.update(label="❌ Extraction failed", state="error")
+                st.error(
+                    "**Extraction failed.** Common reasons:\n"
+                    "- The TikTok link is private or has been deleted\n"
+                    "- Download timed out — try again\n\n"
+                    "Try pasting a different public TikTok URL."
+                )
+                if st.button("🔁 Try Again"):
+                    st.session_state.stage = "input"
+                    st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STAGE 2 — Frame Selection
@@ -725,6 +734,14 @@ elif st.session_state.stage == "portraits":
                 st.rerun()
             else:
                 status.update(label="❌ Portrait generation failed", state="error")
+                st.error(
+                    "**Portrait generation failed.** Common reasons:\n"
+                    "- Gemini API quota exceeded — wait a minute and retry\n"
+                    "- Image content was blocked by safety filters\n\n"
+                    "Click below to try again."
+                )
+                if st.button("🔁 Retry Portraits"):
+                    st.rerun()
     else:
         # Load style config for character info
         config_path = out_dir() / "style_config.json"
@@ -817,6 +834,14 @@ elif st.session_state.stage == "scenes":
                 st.rerun()
             else:
                 status.update(label="❌ Scene generation failed", state="error")
+                st.error(
+                    "**Scene image generation failed.** Common reasons:\n"
+                    "- Gemini API quota exceeded — wait a minute and retry\n"
+                    "- A scene prompt was blocked by safety filters\n\n"
+                    "Click below to retry — already-generated scenes will be skipped."
+                )
+                if st.button("🔁 Retry Scenes"):
+                    st.rerun()
     else:
         beats_data = (st.session_state.script or {}).get("beats", [])
         beat_map = {b["beat_number"]: b for b in beats_data}
@@ -901,6 +926,14 @@ elif st.session_state.stage == "animate":
                 st.rerun()
             else:
                 status.update(label="❌ Animation failed", state="error")
+                st.error(
+                    "**Video animation failed.** Common reasons:\n"
+                    "- Grok API timed out — this step can take up to 10 min\n"
+                    "- API quota reached\n\n"
+                    "Click below to retry — already-generated clips will be skipped."
+                )
+                if st.button("🔁 Retry Animation"):
+                    st.rerun()
     else:
         beat_map = {b["beat_number"]: b for b in beats}
         existing_sorted = sorted(existing)
@@ -964,6 +997,10 @@ elif st.session_state.stage == "animate":
                     st.rerun()
                 else:
                     status.update(label="❌ Assembly failed", state="error")
+                    st.error(
+                        "**Assembly failed.** This usually means one of the video clips is corrupted.\n\n"
+                        "Try regenerating the animation step first, then assemble again."
+                    )
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STAGE 6 — Done
