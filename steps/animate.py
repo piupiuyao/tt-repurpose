@@ -102,6 +102,20 @@ def run(output_dir: Path) -> dict:
             results[beat_num] = str(video_path)
         except Exception as e:
             print(f"     ERROR for beat {beat_num}: {e}")
+            # Fallback: retry without image reference (avoids content filter on image)
+            if scene_image and scene_image.exists():
+                print(f"     Retrying beat {beat_num} without image reference...")
+                try:
+                    time.sleep(3)
+                    request_id = submit_video(grok_prompt, None, duration)
+                    print(f"     Submitted (no image): {request_id}")
+                    video_url = poll_video(request_id)
+                    download_video(video_url, video_path)
+                    size_mb = video_path.stat().st_size / 1024 / 1024
+                    print(f"     Saved: {video_path.name} ({size_mb:.1f}MB)")
+                    results[beat_num] = str(video_path)
+                except Exception as e2:
+                    print(f"     Fallback also failed for beat {beat_num}: {e2}")
 
         time.sleep(3)
 
