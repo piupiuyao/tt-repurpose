@@ -112,9 +112,20 @@ def detect_scenes(video_path: Path, output_dir: Path) -> list[dict]:
     print("  >> Detecting scene boundaries with PySceneDetect...")
     video = open_video(str(video_path))
     sm = SceneManager()
-    sm.add_detector(ContentDetector(threshold=27))
+    sm.add_detector(ContentDetector(threshold=35, min_scene_len=15))
     sm.detect_scenes(video)
     scene_list = sm.get_scene_list()
+
+    # Merge scenes shorter than 2s into the next scene to avoid too many beats
+    MIN_SCENE_SEC = 2.0
+    merged = []
+    for scene in scene_list:
+        dur = scene[1].get_seconds() - scene[0].get_seconds()
+        if merged and dur < MIN_SCENE_SEC:
+            merged[-1] = (merged[-1][0], scene[1])
+        else:
+            merged.append(scene)
+    scene_list = merged
 
     if not scene_list:
         print("  >> No scene cuts detected — falling back to single-scene")
