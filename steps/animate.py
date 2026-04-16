@@ -89,6 +89,8 @@ def run(output_dir: Path) -> dict:
         scene_image = images_dir / f"scene_{beat_num:02d}.png"
 
         duration = beat.get("duration")
+        if duration:
+            duration = min(duration, 10)  # Grok video API max is 10s
         print(f"  >> Beat {beat_num}: {beat['beat_name']}" + (f" ({duration}s)" if duration else ""))
         print(f"     Prompt: {grok_prompt[:80]}...")
 
