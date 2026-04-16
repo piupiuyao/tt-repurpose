@@ -490,7 +490,9 @@ with st.sidebar:
     existing_dirs = sorted([d.name for d in PROJECT_DIR.glob("output_*") if d.is_dir()])
     if existing_dirs:
         resume_dir = st.selectbox("Pick output folder", ["—"] + existing_dirs, label_visibility="collapsed")
-        if resume_dir != "—" and st.button("▶️ Resume"):
+    else:
+        resume_dir = st.text_input("Output folder name", placeholder="output_1234567890", label_visibility="collapsed")
+    if resume_dir and resume_dir != "—" and st.button("▶️ Resume"):
             d = PROJECT_DIR / resume_dir
             # Detect stage from what files exist
             if (d / "final.mp4").exists():
